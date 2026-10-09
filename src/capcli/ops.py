@@ -526,7 +526,7 @@ def check(model, fix: bool = False) -> dict[str, Any]:
     """Look for dangling or empty references in the semantic model.
 
     Also reports realization links without ``sourceElement`` (written by
-    capcli before 0.2 or by plain capellambse); ``fix`` fills them in.
+    earlier capcli versions or by plain capellambse); ``fix`` fills them in.
     """
     known = set()
     for t in model._loader.trees.values():
