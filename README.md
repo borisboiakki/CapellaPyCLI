@@ -1,0 +1,70 @@
+# capcli
+
+A small command line for reading and editing [Capella](https://mbse-capella.org/)
+models, built on [py-capellambse](https://github.com/DSD-DBS/py-capellambse).
+It is designed for coding agents (Claude Code, OpenCode, …) that work through a
+shell. Every command prints JSON, writes are guarded, and Capella doesn't need
+to be running.
+
+## Why not plain capellambse scripts?
+
+Agents can write capellambse scripts, but a few traps come up again and again.
+capcli handles them for you:
+
+| Trap | What capcli does |
+|---|---|
+| `create()` can pick the wrong metaclass (e.g. a `LogicalFunction` under an `OperationalActivity`) | Always passes the right type per layer (OA/SA/LA/PA) |
+| Removing an element leaves `target=""` / dangling references | `delete` refuses while the element is referenced. `--cascade` also removes exchanges, allocations, Parts and orphaned ports |
+| Functional/component exchanges need ports and the right owner | Ports are created and the exchange is placed in the common parent |
+| `PhysicalComponent.components` is a computed list | Uses `owned_components` |
+| Partial writes after an error | `batch` applies a list of steps all-or-nothing |
+| Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules) |
+
+## Install
+
+```bash
+pip install -e .          # or: pipx install git+https://github.com/<you>/CapellaPyCLI
+capcli --help
+```
+
+capellambse 0.8.x is required (tested here on a Capella 7.0 model). Check
+[its docs](https://dsd-dbs.github.io/py-capellambse/) for your version.
+
+## Use with an agent
+
+1. Copy [`templates/AGENTS.md`](templates/AGENTS.md) into the root of your
+   model repository and adjust the marked sections (model path, allowed layers,
+   naming rules). For Claude Code, add `@AGENTS.md` to `CLAUDE.md`.
+2. Keep the model in git. Have the agent work on a branch with Capella closed.
+3. Review with `git diff`, then open the model in Capella to place new elements on diagrams.
+
+## Commands
+
+```text
+read:    info · list · search · show · tree · diagrams list|render
+write:   create function|component|function-exchange|component-exchange
+         allocate · unallocate · realize · set · delete · batch
+verify:  check · validate
+global:  --model PATH (or $CAPELLA_MODEL) · --dry-run
+```
+
+See `templates/AGENTS.md` for a full cheat sheet, or `capcli <command> --help`.
+
+## Limits
+
+- Diagram layout isn't generated: new elements exist in the model but aren't
+  drawn on existing diagrams. `diagrams render` shows diagrams as they were saved.
+- `delete` can't fix diagrams that show deleted elements. It warns you, so you
+  can clean them up in Capella.
+- Deeper changes (functional chains, scenarios, data models, PVMT) need a
+  capellambse script for now. They are good candidates for new `ops`.
+
+## Development
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e '.[test]'
+.venv/bin/pytest
+```
+
+Tests run against capellambse's Capella 7.0 test model, vendored in
+`tests/data/model` (© DB InfraGO AG, Apache-2.0, see the `.license` files).
