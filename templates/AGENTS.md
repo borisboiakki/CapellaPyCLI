@@ -48,9 +48,13 @@ text edit silently breaks them.
     components are **deployed** on nodes (`capcli pa deploy`). A component
     exchange allocated to a link or path must run between components deployed
     on the nodes at its ends: check `capcli pa show <link|path>` for `issues`.
-11. New elements do not appear on existing diagrams. Tell the user which
+11. To reorganise the model, use `capcli move` (it keeps Parts and exchanges
+    consistent), never delete-and-recreate, which loses UUIDs and links. If
+    `capcli check` reports `structure` problems, run `capcli --dry-run repair
+    structure`, show the user the result, and apply it if they agree.
+12. New elements do not appear on existing diagrams. Tell the user which
    diagrams need updating in Capella, because capcli can't lay them out.
-12. If capcli cannot do something, say so and propose a reviewed Python script
+13. If capcli cannot do something, say so and propose a reviewed Python script
     using `capellambse`. Don't work around it with raw XML edits.
 
 ## Naming conventions (ADJUST)
@@ -63,7 +67,8 @@ text edit silently breaks them.
 
 Every command prints JSON. Errors are `{"error": "..."}` with exit code 1.
 Element arguments take a UUID or a shortcut: `la:root-function`,
-`la:root-component`, `la:structure` (the package for actors), `oa:root-activity`,
+`la:root-component`, `la:structure` (the package for actors), `la:functions`,
+`la:capabilities`, `la:data`, `la:interfaces` (root packages), `oa:root-activity`,
 `oa:root-entity` (same for `sa`, `pa`).
 
 ```bash
@@ -150,6 +155,11 @@ capcli allocate <component-exchange> <physical-link|physical-path>
 capcli allocate <component-port> <physical-port>
 capcli pa show <component|port|link|path>     # deployment, hops, allocations, issues
 
+# Structure: packages, moving, repair
+capcli package create --parent <la:functions|la:structure|la:capabilities|la:data|la:interfaces|pkg|function|component> --name Avionics
+capcli move <element> <new-parent>            # same layer; Part and exchanges follow
+capcli --dry-run repair structure             # preview, then without --dry-run to apply
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -205,5 +215,6 @@ or `"parent"`, plus `"literals"` / `"mechanism"`), `add-property` (`"class"`,
 `"guard"`, `"trigger_description"`), `set-available` (`"state"`, `"elements"`, `"remove"`),
 `create-physical-port` (`"component"`, `"name"`), `create-physical-link` (`"source"`,
 `"target"`, `"name"`), `create-physical-path` (`"name"`, `"links"`, `"parent"`), `deploy`
-(`"element"`, `"host"`, `"remove"`).
+(`"element"`, `"host"`, `"remove"`), `create-package` (`"parent"`, `"name"`), `move`
+(`"element"`, `"to"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.

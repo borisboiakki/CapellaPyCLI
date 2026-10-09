@@ -18,6 +18,7 @@ from . import chains as _chains
 from . import data as _data
 from . import modes as _modes
 from . import physical as _physical
+from . import structure as _structure
 from . import status as _status
 from .model import (
     COMPONENT_TYPE,
@@ -30,6 +31,7 @@ from .model import (
     root_function,
     type_name,
 )
+from .model import common_owner as _common_owner
 from .model import is_component as _is_component
 from .model import is_function as _is_function
 from .model import require_layer as _require_layer
@@ -40,22 +42,6 @@ def _expect(obj, pred, what: str):
     if not pred(obj):
         raise CapError(f"Expected {what}, got {type_name(obj)} {obj.uuid}")
     return obj
-
-
-def _ancestors(obj):
-    p = getattr(obj, "parent", None)
-    while p is not None and layer_key(p) is not None:
-        yield p
-        p = getattr(p, "parent", None)
-
-
-def _common_owner(a, b, pred, fallback):
-    """Deepest common proper ancestor of a and b satisfying pred."""
-    b_anc = {x.uuid for x in _ancestors(b)}
-    for x in _ancestors(a):
-        if pred(x) and x.uuid in b_anc:
-            return x
-    return fallback
 
 
 # --------------------------------------------------------------------- create
@@ -700,3 +686,4 @@ OPS.update(_status.OPS)
 OPS.update(_data.OPS)
 OPS.update(_modes.OPS)
 OPS.update(_physical.OPS)
+OPS.update(_structure.OPS)

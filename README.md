@@ -25,6 +25,7 @@ capcli handles them for you:
 | Deleting an exchange item would cascade to every exchange that carries it | `delete --cascade` *detaches* the item from exchanges and ports and keeps them |
 | State machines miss Capella's caches (`involvedStates`, `referencedStates`) and per-state regions; guards are created without their text | `mode` commands maintain them, and `check --fix` rebuilds stale caches |
 | capellambse offers an `InstanceDeploymentLink` for deployment and writes physical paths without their hop order (`nextInvolvements`) | `pa deploy` writes Capella's `PartDeploymentLink`; `pa path` writes the hop chain |
+| Moving a component leaves its Part in the old parent, and exchanges keep an owner that may no longer be the common parent of their ends | `move` moves the Part and re-homes exchanges and physical links |
 | Partial writes after an error | `batch` applies a list of steps all-or-nothing |
 | Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules), plus an `issues` list in `chain show` and `capability show` |
 
@@ -83,6 +84,7 @@ chains:  chain list|show|create|add|remove|involve
 capab.:  capability list|show|create|involve|uninvolve|include|extend|generalize
          mission create|show|exploit|involve · realize · unrealize
 status:  status values|set|list
+struct:  package create · move · repair structure
 pa:      pa list|show · pa port · pa link · pa path · pa deploy
 modes:   mode list|show · mode machine create · mode add · mode transition · mode available
 data:    data types|show · data class create · data property add · data enum create|add-literal
@@ -165,6 +167,9 @@ Kinds available in `capcli list <layer> <kind>`:
 | Capability include / extend / generalize | ✅ | | ✅ | `capability include`, `extend` or `generalize`, each with `--remove` |
 | Missions (SA): exploited capabilities, involved actors | ✅ | | ✅ | `mission create`, `mission exploit`, `mission involve` (`--remove` to undo) |
 | Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
+| Packages (function, component, capability, data, interface) | ✅ | ✅ | ✅ | `package create --parent …`: the kind follows from the parent. Shortcuts `<layer>:functions`, `:structure`, `:capabilities`, `:data`, `:interfaces`. Packages are deleted like any element |
+| Moving an element to another parent | | ✅ | | `move <element> <new-parent>`: functions, components, actors, packages, capabilities, data elements, chains. Same layer only; Arcadia rules apply; the component's Part moves with it, and exchanges/physical links are re-homed |
+| Repairing structure violations | | ✅ | | `repair structure` (preview with `--dry-run`): actors inside components go to the Structure package. SA sub-systems are reported with options, because the fix is a modelling decision |
 | Physical ports and links (PA) | ✅ | ✅ | ✅ | `pa port`, `pa link` (ports created automatically). Only between node components |
 | Deployment of behaviour (or node) components on nodes | ✅ | | ✅ | `pa deploy` / `pa deploy --remove`. A node is never deployed on a behaviour component |
 | Physical paths | ✅ | | ✅ | `pa path --link … --link …` from consecutive links. Deleting a link with `--cascade` also deletes the paths through it |
@@ -189,7 +194,7 @@ Changing them needs Capella, or a reviewed capellambse script.
 
 | Area | What is missing |
 |---|---|
-| Structure | Creating packages. Moving an element to another parent. Reordering elements |
+| Structure | Reordering elements within a list. Moving states, ports, exchanges or elements across layers. Automatic fixing of SA sub-systems |
 | Capabilities | Capability packages. Pre- and postconditions (see Constraints) |
 | Scenarios | Scenarios, instance roles, sequence messages, fragments |
 | Modes and states | Entry, exit and do-activities of states. History, entry-point and exit-point pseudo-states. Moving a state to another region. State and transition realizations across layers |
