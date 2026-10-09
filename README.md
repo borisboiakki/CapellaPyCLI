@@ -21,6 +21,8 @@ capcli handles them for you:
 | capellambse can't edit chains through `involved_*`, and `capability.involved_chains.append()` rejects chains | `chain` commands create the involvements directly and keep links and functions consistent |
 | Realizations written with only `targetElement` (Capella always writes `sourceElement` too) | `realize` writes both ends. `check` reports incomplete links and `check --fix` repairs them |
 | `status` accepts any enumeration literal (even PVMT values), and `status = None` raises | `status` only accepts the project's ProgressStatus values, and `NOT_SET` clears it |
+| Data elements are written without multiplicities, literal back-references or Capella's default element flags, and multiplicities can't be created through the API | `data` commands write them the way Capella does |
+| Deleting an exchange item would cascade to every exchange that carries it | `delete --cascade` *detaches* the item from exchanges and ports and keeps them |
 | Partial writes after an error | `batch` applies a list of steps all-or-nothing |
 | Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules), plus an `issues` list in `chain show` and `capability show` |
 
@@ -79,6 +81,8 @@ chains:  chain list|show|create|add|remove|involve
 capab.:  capability list|show|create|involve|uninvolve|include|extend|generalize
          mission create|show|exploit|involve · realize · unrealize
 status:  status values|set|list
+data:    data types|show · data class create · data property add · data enum create|add-literal
+         data exchange-item create|add-element · data assign
 verify:  check · validate
 global:  --model PATH (or $CAPELLA_MODEL) · --dry-run
 ```
@@ -115,6 +119,7 @@ the kinds capcli can't create or modify.
 | Functional chains | `capcli chain list / show` | Ordered steps, entry and exit functions, and integrity issues |
 | Diagrams | `capcli diagrams list / render` | Lists diagrams (name, type, target) and renders one to SVG, as saved in the `.aird` |
 | Capabilities and missions | `capcli capability list / show`, `capcli mission show` | Involved components, actors or entities, functions and chains; realizations up and down; include, extend and generalize relations in both directions; exploiting missions (SA); scenarios; and an `issues` list |
+| Data model | `capcli data types --layer L`, `capcli data show`, and `show` | Types usable from a layer (its own and those of the layers above, including SA's predefined types); classes with typed properties and multiplicities; enumeration literals; exchange items with their elements and the exchanges/ports that carry them; where each type is used; an `issues` list |
 | Progress status | `capcli status values / list`, and `show` | The project's status values, elements grouped by status, and each element's status in `show` |
 | Model health | `capcli check`, `capcli validate` | Arcadia structure violations, broken, empty or incomplete references (`check --fix` repairs missing realization sources), and capellambse's validation rules |
 
@@ -154,6 +159,10 @@ Kinds available in `capcli list <layer> <kind>`:
 | Capability include / extend / generalize | ✅ | | ✅ | `capability include`, `extend` or `generalize`, each with `--remove` |
 | Missions (SA): exploited capabilities, involved actors | ✅ | | ✅ | `mission create`, `mission exploit`, `mission involve` (`--remove` to undo) |
 | Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
+| Classes and properties (type, multiplicity, association/aggregation/composition) | ✅ | ✅ | ✅ | `data class create`, `data property add`. A property's type must come from the same layer or a layer above |
+| Enumerations and literals | ✅ | ✅ | ✅ | `data enum create --literal …`, `data enum add-literal` |
+| Exchange items and their elements | ✅ | ✅ | ✅ | `data exchange-item create --mechanism …`, `add-element`. Deleting an item detaches it from its carriers |
+| Exchange items carried by functional exchanges, function ports, component exchanges | ✅ | | ✅ | `data assign <item> <carrier>... [--remove]` |
 | Progress status (DRAFT, TO_BE_REVIEWED, …) of any element | | ✅ | ✅ | `status set VALUE <uuid>...` or `set <uuid> status=VALUE`. Only the project's ProgressStatus values are accepted. `NOT_SET` clears |
 | Existing requirement text | | ✅ | | `set <req> text="<p>…</p>"` |
 | Existing property values (PVMT) | | ✅ | | `set <property value> value=…` |
@@ -171,7 +180,7 @@ Changing them needs Capella, or a reviewed capellambse script.
 | Capabilities | Capability packages. Pre- and postconditions (see Constraints) |
 | Scenarios | Scenarios, instance roles, sequence messages, fragments |
 | Modes and states | State machines, regions, states, modes, transitions. "Available in states" on functions and chains |
-| Data model | Classes, properties, data types, enumerations, unions, collections, exchange items. Assigning exchange items to exchanges, ports or chain links. Existing items' simple attributes can still be changed with `set` |
+| Data model | Unions, collections, physical quantities and new numeric/string/boolean types. Class generalization (super-classes). Exchange items on chain links. Use the existing types, or create them in Capella |
 | Interfaces and ports | Interfaces, interface allocation and implementation. Creating or allocating ports on their own: ports only come into being with an exchange |
 | Physical architecture | Physical links, physical paths, physical ports, deploying behaviour components on node components |
 | Functional chains | Control nodes and sequence links of complex chains (AND/OR/ITERATE). They are kept but not editable, and `chain show` leaves them out. Exchange contexts and exchanged items on chain links |

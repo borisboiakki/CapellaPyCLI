@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, ops, status
+from . import __version__, capabilities, chains, data, ops, status
 from .model import (
     LAYERS,
     CapError,
@@ -181,6 +181,9 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
         return
     if capabilities.is_capability(obj) and not attrs:
         emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if data.is_data_element(obj) and not attrs:
+        emit(data.show(ctx.model, uuid))
         return
     if type_name(obj) == "Mission" and not attrs:
         emit(capabilities.show_mission(ctx.model, uuid))
@@ -624,6 +627,132 @@ def _relation_command(relation: str, verb: str):
 _relation_command("include", "includes")
 _relation_command("extend", "extends")
 _relation_command("generalize", "specializes (OTHER is the more general capability)")
+
+
+@cli.group("data")
+def data_group() -> None:
+    """Data model: classes, enumerations, exchange items and their use."""
+
+
+@data_group.command("types")
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS), required=True)
+@click.option("--name", "name_filter", help="Case-insensitive substring filter.")
+@click.pass_obj
+@handled
+def data_types(ctx: Ctx, layer_name: str, name_filter: str | None) -> None:
+    """Types usable from LAYER: its own, the layers above, and the predefined ones."""
+    emit(data.types(ctx.model, layer_name, name_filter))
+
+
+@data_group.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def data_show(ctx: Ctx, uuid: str) -> None:
+    """Show a class, enumeration, exchange item or data type with its usage and issues."""
+    emit(data.show(ctx.model, uuid))
+
+
+@data_group.group("class")
+def data_class() -> None:
+    """Classes and their properties."""
+
+
+@data_class.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS), help="Create in the layer's data package.")
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def data_class_create(model, name, layer_name, parent, description):
+    """Create a class in a data package."""
+    return data.create_class(model, name, layer_name, parent, description)
+
+
+@data_group.group("property")
+def data_property() -> None:
+    """Class properties."""
+
+
+@data_property.command("add")
+@click.argument("class_uuid", metavar="CLASS")
+@click.option("--name", required=True)
+@click.option("--type", "type_", required=True, help="Type UUID (see `capcli data types`).")
+@click.option("--min", "min_", default="1", show_default=True)
+@click.option("--max", "max_", default="1", show_default=True, help="A number or '*'.")
+@click.option("--kind", type=click.Choice(["association", "aggregation", "composition"], case_sensitive=False),
+              default="association", show_default=True)
+@click.option("--description")
+@write_command
+def data_property_add(model, class_uuid, name, type_, min_, max_, kind, description):
+    """Add a typed property with a multiplicity to CLASS."""
+    return data.add_property(model, class_uuid, name, type_, min_, max_, kind, description)
+
+
+@data_group.group("enum")
+def data_enum() -> None:
+    """Enumerations and their literals."""
+
+
+@data_enum.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--literal", "literals", multiple=True, help="Literal name (repeatable, in order).")
+@click.option("--description")
+@write_command
+def data_enum_create(model, name, layer_name, parent, literals, description):
+    """Create an enumeration, optionally with its literals."""
+    return data.create_enumeration(model, name, layer_name, parent, list(literals), description)
+
+
+@data_enum.command("add-literal")
+@click.argument("enum_uuid", metavar="ENUMERATION")
+@click.argument("literals", nargs=-1, required=True)
+@write_command
+def data_enum_add_literal(model, enum_uuid, literals):
+    """Append literals to an enumeration."""
+    return data.add_literals(model, enum_uuid, list(literals))
+
+
+@data_group.group("exchange-item")
+def data_exchange_item() -> None:
+    """Exchange items and their elements."""
+
+
+@data_exchange_item.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--mechanism", type=click.Choice(["unset", "flow", "operation", "event", "shared_data"], case_sensitive=False),
+              default="unset", show_default=True)
+@click.option("--description")
+@write_command
+def data_exchange_item_create(model, name, layer_name, parent, mechanism, description):
+    """Create an exchange item."""
+    return data.create_exchange_item(model, name, layer_name, parent, mechanism, description)
+
+
+@data_exchange_item.command("add-element")
+@click.argument("exchange_item", metavar="EXCHANGE_ITEM")
+@click.option("--name", required=True)
+@click.option("--type", "type_", required=True, help="Type UUID (see `capcli data types`).")
+@click.option("--min", "min_", default="1", show_default=True)
+@click.option("--max", "max_", default="1", show_default=True)
+@write_command
+def data_exchange_item_add_element(model, exchange_item, name, type_, min_, max_):
+    """Add a typed element to an exchange item."""
+    return data.add_element(model, exchange_item, name, type_, min_, max_)
+
+
+@data_group.command("assign")
+@click.argument("exchange_item", metavar="EXCHANGE_ITEM")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def data_assign(model, exchange_item, elements, remove):
+    """Make functional exchanges, function ports or component exchanges carry EXCHANGE_ITEM."""
+    return data.assign(model, exchange_item, list(elements), remove)
 
 
 @cli.group("status")

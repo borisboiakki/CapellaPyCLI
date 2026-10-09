@@ -113,6 +113,17 @@ capcli capability generalize <cap> <more-general-cap> [--remove]
 capcli realize <la-capability> <sa-capability>    # sa->oa, la->sa, pa->la
 capcli unrealize <element> <realized>         # works for every kind of realization
 
+# Data model (classes, enumerations, exchange items)
+capcli data types --layer la [--name int]     # types usable from LA (own + layers above)
+capcli data class create --layer la --name "Position"
+capcli data property add <class> --name lat --type <type> [--min 0] [--max '*'] [--kind composition]
+capcli data enum create --layer la --name NavMode --literal AUTO --literal MANUAL
+capcli data enum add-literal <enum> SAFE
+capcli data exchange-item create --layer la --name PositionMsg --mechanism flow
+capcli data exchange-item add-element <exchange-item> --name pos --type <type> [--min/--max]
+capcli data assign <exchange-item> <functional-exchange|function-port|component-exchange>... [--remove]
+capcli data show <uuid>                       # properties, literals, elements, usage, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -157,5 +168,10 @@ Ops: `create-function`, `create-component`, `create-function-exchange`,
 `capability-include` / `capability-extend` / `capability-generalize`
 (`"capability"`, `"other"`, `"remove"`), `create-mission` (`"name"`),
 `mission-exploit` (`"mission"`, `"capability"`, `"remove"`), `mission-involve`
-(`"mission"`, `"elements"`, `"remove"`), `set-status` (`"value"`, `"elements"`).
+(`"mission"`, `"elements"`, `"remove"`), `set-status` (`"value"`, `"elements"`),
+`create-class` / `create-enumeration` / `create-exchange-item` (`"name"`, `"layer"`
+or `"parent"`, plus `"literals"` / `"mechanism"`), `add-property` (`"class"`,
+`"name"`, `"type"`, `"min"`, `"max"`, `"kind"`), `add-literals` (`"enumeration"`,
+`"literals"`), `add-exchange-item-element` (`"exchange_item"`, `"name"`, `"type"`,
+`"min"`, `"max"`), `assign-exchange-item` (`"exchange_item"`, `"elements"`, `"remove"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.
