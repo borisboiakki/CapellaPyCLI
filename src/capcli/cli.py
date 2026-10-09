@@ -85,7 +85,8 @@ def write_command(fn):
     @handled
     def wrapper(ctx: Ctx, *a, **kw):
         result = fn(ctx.model, *a, **kw)
-        saved = ctx.save()
+        # Nothing changed: don't rewrite the files (Capella would see them as modified).
+        saved = False if result.get("unchanged") is True else ctx.save()
         emit({**result, "saved": saved, **({"dry_run": True} if ctx.dry_run else {})})
 
     return wrapper
@@ -146,7 +147,7 @@ def _kinds(lay) -> list[str]:
 @click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
 @click.argument("kind", required=False)
 @click.option("--name", "name_filter", help="Case-insensitive substring filter on name.")
-@click.option("--limit", type=int, default=500, show_default=True)
+@click.option("--limit", type=click.IntRange(min=0), default=500, show_default=True)
 @click.pass_obj
 @handled
 def list_(ctx: Ctx, layer_name: str, kind: str | None, name_filter: str | None, limit: int) -> None:
@@ -205,7 +206,7 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
 @click.option("--type", "types", multiple=True, help="Metaclass name, e.g. LogicalFunction (repeatable).")
 @click.option("--layer", "layer_name", type=click.Choice(LAYERS))
 @click.option("--exact", is_flag=True, help="Match the name exactly instead of substring.")
-@click.option("--limit", type=int, default=100, show_default=True)
+@click.option("--limit", type=click.IntRange(min=0), default=100, show_default=True)
 @click.pass_obj
 @handled
 def search(ctx: Ctx, text: str, types: tuple[str, ...], layer_name: str | None, exact: bool, limit: int) -> None:
@@ -290,7 +291,7 @@ def tree(ctx: Ctx, uuid: str, depth: int) -> None:
 @cli.command()
 @click.option("--layer", "layer_name", type=click.Choice(LAYERS))
 @click.option("--all", "show_all", is_flag=True, help="Include RECOMMENDED rule failures.")
-@click.option("--limit", type=int, default=200, show_default=True)
+@click.option("--limit", type=click.IntRange(min=0), default=200, show_default=True)
 @click.pass_obj
 @handled
 def validate(ctx: Ctx, layer_name: str | None, show_all: bool, limit: int) -> None:
@@ -312,7 +313,9 @@ def validate(ctx: Ctx, layer_name: str | None, show_all: bool, limit: int) -> No
 @cli.command()
 @click.pass_obj
 @handled
-@click.option("--fix", is_flag=True, help="Fill in missing sourceElement on realization links and save.")
+@click.option("--fix", is_flag=True, help="Repair what has one safe answer and save: missing sourceElement on "
+              "realization links, stale state caches, interface implementations written with "
+              "'implementedInterfaces'.")
 def check(ctx: Ctx, fix: bool) -> None:
     """Check the model for dangling, empty or incomplete references (run after edits)."""
     res = ops.check(ctx.model, fix=fix)
@@ -771,8 +774,8 @@ def data_property() -> None:
 @click.option("--type", "type_", required=True, help="Type UUID (see `capcli data types`).")
 @click.option("--min", "min_", default="1", show_default=True)
 @click.option("--max", "max_", default="1", show_default=True, help="A number or '*'.")
-@click.option("--kind", type=click.Choice(["association", "aggregation", "composition"], case_sensitive=False),
-              default="association", show_default=True)
+@click.option("--kind", type=click.Choice(["unset", "association", "aggregation", "composition"], case_sensitive=False),
+              default="unset", show_default=True, help="unset for a plain attribute (as Capella writes it).")
 @click.option("--description")
 @write_command
 def data_property_add(model, class_uuid, name, type_, min_, max_, kind, description):
@@ -1228,14 +1231,31 @@ def batch(ctx: Ctx, file) -> None:
     if not isinstance(steps, list):
         raise CapError("Batch input must be a JSON list of steps")
     results = ops.run_batch(ctx.model, steps)
-    saved = ctx.save()
+    saved = False if all(r.get("unchanged") is True for r in results) else ctx.save()
     emit({"steps": results, "saved": saved, **({"dry_run": True} if ctx.dry_run else {})})
 
 
 def main() -> None:
     # capellambse emits deprecation chatter on stderr; keep output clean.
     warnings.simplefilter("ignore")
-    cli()
+    # JSON is always UTF-8: on Windows a piped stdout defaults to cp1252, and
+    # a failed print after a save would report an error for a change that
+    # was made (an agent would then retry and duplicate it).
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
+    try:
+        code = cli.main(standalone_mode=False)
+    except click.ClickException as e:
+        # Usage errors keep the JSON contract and exit 1: exit 2 means
+        # "`check` found problems", and agents must not confuse the two.
+        where = e.ctx.command_path if getattr(e, "ctx", None) else "capcli"
+        emit({"error": f"{e.format_message()} (see `{where} --help`)"})
+        sys.exit(1)
+    except click.Abort:
+        emit({"error": "aborted"})
+        sys.exit(1)
+    sys.exit(code if isinstance(code, int) else 0)
 
 
 if __name__ == "__main__":

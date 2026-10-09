@@ -24,6 +24,7 @@ from .model import (
     LAYERS,
     CapError,
     add_xml_child,
+    cs_alias,
     brief,
     is_component,
     layer,
@@ -34,7 +35,6 @@ from .model import (
     with_status,
 )
 
-CS_ALIAS_HINT = "org.polarsys.capella.core.data.cs"
 BAD_IMPL_ATTR = "implementedInterfaces"  # what capellambse writes
 IMPL_ATTR = "implementedInterface"  # what Capella writes
 
@@ -51,14 +51,6 @@ def _visible(user, iface) -> None:
     if LAYERS.index(ki) > LAYERS.index(ku):
         raise CapError(f"{brief(iface)} is in {ki} and is not visible from {ku}: "
                        "interfaces come from the same layer or a layer above")
-
-
-def _cs_prefix(model, el) -> str:
-    _, frag = model._loader._find_fragment(el)
-    for prefix, uri in frag.root.nsmap.items():
-        if prefix and uri.rstrip("/").rsplit("/", 1)[0].endswith("/capella/core/cs"):
-            return prefix
-    return CS_ALIAS_HINT
 
 
 def _children(obj, tag: str, attr: str, target_uuid: str | None = None):
@@ -142,7 +134,7 @@ def provide(model, element: str, interface: str, remove: bool = False):
     if links:
         return {"unchanged": True, "reason": "already provided"}
     add_xml_child(model, obj._element, "ownedInterfaceImplementations",
-                  f"{_cs_prefix(model, obj._element)}:InterfaceImplementation",
+                  f"{cs_alias(model, obj._element)}:InterfaceImplementation",
                   **{IMPL_ATTR: "#" + iface.uuid})
     return {"element": brief(obj), "provides": brief(iface)}
 
@@ -188,6 +180,9 @@ def allocate_interface(model, element: str, interface: str, remove: bool = False
         raise CapError("An interface cannot be allocated to itself")
     _visible(obj, iface)
     links = _children(obj, "ownedInterfaceAllocations", "targetElement", iface.uuid)
+    if not remove and not links and type_name(obj) == "Interface" and obj in _allocated_closure(model, iface):
+        raise CapError(f"{brief(iface)} already allocates {brief(obj)} (directly or not): "
+                       "this allocation would create a cycle")
     if remove:
         if not links:
             raise CapError(f"{brief(iface)} is not allocated to {brief(obj)}")
@@ -197,9 +192,27 @@ def allocate_interface(model, element: str, interface: str, remove: bool = False
     if links:
         return {"unchanged": True, "reason": "already allocated"}
     add_xml_child(model, obj._element, "ownedInterfaceAllocations",
-                  f"{_cs_prefix(model, obj._element)}:InterfaceAllocation",
+                  f"{cs_alias(model, obj._element)}:InterfaceAllocation",
                   targetElement="#" + iface.uuid, sourceElement="#" + obj.uuid)
     return {"element": brief(obj), "allocates": brief(iface)}
+
+
+def _allocated_closure(model, iface) -> list:
+    """Interfaces that ``iface`` allocates, directly or through other interfaces."""
+    seen, todo, out = {iface.uuid}, [iface], []
+    while todo:
+        cur = todo.pop()
+        for el in _children(cur, "ownedInterfaceAllocations", "targetElement"):
+            ref = (el.get("targetElement") or "").rpartition("#")[2]
+            if ref and ref not in seen:
+                seen.add(ref)
+                try:
+                    nxt = model.by_uuid(ref)
+                except KeyError:
+                    continue
+                out.append(nxt)
+                todo.append(nxt)
+    return out
 
 
 # --------------------------------------------------------------------- reads

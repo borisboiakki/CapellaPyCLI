@@ -199,13 +199,15 @@ def add_transition(model, source: str, target: str, triggers: list[str] | None =
                 raise CapError(f"{brief(ev)} is in a layer below and is not visible from this state machine")
         else:
             same_layer(src, ev)
-        tr.triggers.append(ev)
+        if ev not in tr.triggers:  # a reference list never holds the same element twice
+            tr.triggers.append(ev)
     for ref in effects or []:
         fn = resolve(model, ref)
         if not is_function(fn):
             raise CapError(f"Effects are functions, not {type_name(fn)}")
         same_layer(src, fn)
-        tr.effect.append(fn)
+        if fn not in tr.effect:
+            tr.effect.append(fn)
     if trigger_description:
         tr.trigger_description = trigger_description
     if guard:

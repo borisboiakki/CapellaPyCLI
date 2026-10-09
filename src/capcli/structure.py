@@ -91,7 +91,7 @@ def create_package(model, parent: str, name: str):
 # ---------------------------------------------------------------------- move
 
 
-def _check_target(elem, target) -> str:
+def _check_target(model, elem, target) -> str:
     """Validate a move and return the attribute of target that will hold elem."""
     ke, kt = require_layer(elem), require_layer(target)
     if ke != kt:
@@ -112,6 +112,9 @@ def _check_target(elem, target) -> str:
             raise CapError(f"Actors live in the Structure package (or a sub-package), not inside {tt}")
         if ke == "sa" and is_component(target):
             raise CapError("System Analysis is a black box: nothing moves inside the System")
+        if ke in ("la", "pa") and not actor and target == structure_pkg(model, ke):
+            raise CapError(f"Only actors and the {ke.upper()} root component live directly in the "
+                           f"Structure package; move components inside {ke}:root-component")
         if ke == "oa":
             return "entities"
         return "owned_components" if tt == "PhysicalComponent" else "components"
@@ -144,14 +147,16 @@ def _all_ancestors(obj):
         p = getattr(p, "parent", None)
 
 
-def _move_part(model, comp, new_parent) -> dict[str, Any] | None:
-    """Move the component's Part next to the component (see module doc)."""
-    parts = [p for p in model.search("Part") if p.type == comp]
+def _move_part(model, comp, old_parent, new_parent) -> dict[str, Any] | None:
+    """Move the component's Part next to the component (see module doc).
+
+    Only the Part held by the old parent moves: in multi-part models a
+    component can have several Parts elsewhere, which stay where they are.
+    """
+    parts = [p for p in model.search("Part") if p.type == comp and p.parent == old_parent]
     if not parts:
         return None
     part = parts[0]
-    if part.parent == new_parent:
-        return None
     el = part._element
     el.getparent().remove(el)
     el.tag = "ownedParts" if type_name(new_parent).endswith("Pkg") else "ownedFeatures"
@@ -160,53 +165,70 @@ def _move_part(model, comp, new_parent) -> dict[str, Any] | None:
 
 
 def _rehome_links(model, moved) -> list[dict[str, Any]]:
-    """Move exchanges/links touching ``moved`` (or below it) to their common owner."""
+    """Move exchanges/links touching ``moved`` (or below it) to their common owner.
+
+    ``moved`` may be a function, a component or a package: whatever moved
+    with it counts, so a package move re-homes the exchanges of its content.
+    """
     key = require_layer(moved)
     inside = {moved.uuid} | {e.get("id") for e in moved._element.iter() if isinstance(e.tag, str) and e.get("id")}
     rehomed = []
+    lay = getattr(model, key)
 
     def ends_of(link):
         if type_name(link) == "PhysicalLink":
             return [e.parent for e in link.ends]
         return [endpoint_owner(link.source), endpoint_owner(link.target)]
 
-    candidates = []
-    if is_function(moved):
-        candidates = [(x, "exchanges", is_function, root_function(model, key))
-                      for x in model.search("FunctionalExchange", below=getattr(model, key))]
-    elif is_component(moved):
-        attr_ok = lambda o: hasattr(o, "component_exchanges")  # noqa: E731
-        candidates = [(x, "component_exchanges", attr_ok, root_component(model, key))
-                      for x in model.search("ComponentExchange", below=getattr(model, key))]
-        if key == "pa":
-            candidates += [(x, "physical_links", lambda o: hasattr(o, "physical_links"), root_component(model, key))
-                           for x in model.search("PhysicalLink", below=model.pa)]
+    def has(attr):
+        return lambda o: hasattr(o, attr)
+
+    candidates = [(x, "exchanges", is_function, root_function(model, key))
+                  for x in model.search("FunctionalExchange", below=lay)]
+    if key == "oa":
+        # OA entity links are CommunicationMeans, owned by entities or the entity package.
+        candidates += [(x, "communication_means", has("communication_means"), root_component(model, key))
+                       for x in model.search("CommunicationMean", below=lay)]
+    else:
+        candidates += [(x, "component_exchanges", has("component_exchanges"), root_component(model, key))
+                       for x in model.search("ComponentExchange", below=lay)]
+    if key == "pa":
+        candidates += [(x, "physical_links", has("physical_links"), root_component(model, key))
+                       for x in model.search("PhysicalLink", below=lay)]
     for link, attr, pred, fallback in candidates:
         a, b = ends_of(link)
         if a is None or b is None or not ({a.uuid, b.uuid} & inside):
             continue
         owner = common_owner(a, b, pred, fallback)
-        if key == "oa" and attr == "component_exchanges" and hasattr(owner, "communication_means"):
-            attr = "communication_means"
         if link.parent != owner and hasattr(owner, attr):
             getattr(owner, attr).append(link)
             rehomed.append({**brief(link), "to": brief(owner)})
     return rehomed
 
 
+def _refuse_roots(model, elem, verb: str) -> None:
+    key = require_layer(elem)
+    parent = elem._element.getparent()
+    if (parent is None or parent is elem.layer._element
+            or elem in (root_function(model, key), root_component(model, key))):
+        raise CapError(f"Cannot {verb} a layer's root package, function or component; "
+                       f"{verb} what is inside it instead")
+
+
 def move(model, element: str, to: str):
     elem, target = resolve(model, element), resolve(model, to)
+    _refuse_roots(model, elem, "move")
     if elem.parent == target:
         return {"unchanged": True, "reason": "already there"}
-    attr = _check_target(elem, target)
+    attr = _check_target(model, elem, target)
     old_parent = elem.parent
     getattr(target, attr).append(elem)
     result: dict[str, Any] = {"moved": brief(elem), "from": brief(old_parent), "to": brief(target)}
-    if is_component(elem) and layer_key(elem) != "oa":
-        part = _move_part(model, elem, target)
+    if is_component(elem):
+        part = _move_part(model, elem, old_parent, target)
         if part:
             result["part_moved"] = part
-    rehomed = _rehome_links(model, elem) if (is_function(elem) or is_component(elem)) else []
+    rehomed = _rehome_links(model, elem)
     if rehomed:
         result["rehomed"] = rehomed
     return result
@@ -218,6 +240,8 @@ def reorder(model, element: str, before: str | None = None, after: str | None = 
     elem = resolve(model, element)
     if sum(bool(x) for x in (before, after, first, last)) != 1:
         raise CapError("Give exactly one of --before, --after, --first, --last")
+    if layer_key(elem) is None or elem._element.getparent() is None:
+        raise CapError("Cannot reorder a layer or the model root; reorder elements inside a layer")
     el = elem._element
     parent = el.getparent()
     siblings = [c for c in parent if c.tag == el.tag]

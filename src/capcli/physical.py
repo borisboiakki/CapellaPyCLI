@@ -22,7 +22,9 @@ from typing import Any
 
 from .model import (
     CapError,
+    add_xml_child,
     brief,
+    cs_alias,
     require_layer,
     resolve,
     root_component,
@@ -122,8 +124,27 @@ def deploy(model, element: str, host: str, remove: bool = False):
         return {"undeployed": brief(comp), "from": brief(hst)}
     if links:
         return {"unchanged": True, "reason": "already deployed there"}
+    if _deployed_under(model, hst, comp):
+        raise CapError(f"{brief(hst)} is itself deployed on {brief(comp)} (directly or not): "
+                       "this deployment would create a cycle")
     hp.deployment_links.create("PartDeploymentLink", deployed_element=cp, location=hp)
     return {"deployed": brief(comp), "on": brief(hst)}
+
+
+def _deployed_under(model, comp, host) -> bool:
+    """True if ``comp`` runs on ``host``, directly or through intermediate hosts."""
+    hosts_of = _hosts_of(model)
+    todo, seen = [comp], set()
+    while todo:
+        c = todo.pop()
+        if c.uuid in seen:
+            continue
+        seen.add(c.uuid)
+        for h in hosts_of.get(c.uuid, []):
+            if h == host:
+                return True
+            todo.append(h)
+    return False
 
 
 def create_path(model, name: str, links: list[str], parent: str | None = None):
@@ -134,6 +155,8 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
             raise CapError(f"A path is made of physical links, not {type_name(lk)}")
     if not lks:
         raise CapError("A path needs at least one link")
+    if len({lk.uuid for lk in lks}) != len(lks):
+        raise CapError("A link appears twice in the path; give each link once, in order")
     nodes_of = [[e.parent for e in lk.ends] for lk in lks]
     # Orient the chain: the first node is the end of link 1 not shared with link 2.
     if len(lks) == 1:
@@ -142,7 +165,8 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
         shared = set(c.uuid for c in nodes_of[0]) & set(c.uuid for c in nodes_of[1])
         if not shared:
             raise CapError(f"Links {lks[0].name!r} and {lks[1].name!r} do not share a node")
-        first = next(c for c in nodes_of[0] if c.uuid not in shared) if len({c.uuid for c in nodes_of[0]}) > 1 else nodes_of[0][0]
+        # Parallel links share both nodes: then start from link 1's first end.
+        first = next((c for c in nodes_of[0] if c.uuid not in shared), nodes_of[0][0])
     hops, current = [first], first
     for lk, ends in zip(lks, nodes_of):
         if current not in ends:
@@ -154,9 +178,12 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
     _component(owner, "a physical component to own the path")
     path = owner.physical_paths.create("PhysicalPath", name=name)
     items = [h if type_name(h) == "PhysicalLink" else _part(model, h) for h in hops]
-    for item in items:
-        path.involved_items.append(item)
-    invs = [c for c in path._element if c.tag == "ownedPhysicalPathInvolvements"]
+    # involved_items.append() skips an item already in the path, which drops
+    # the first node of a ring (A, L1, B, L2, A): write one involvement per hop.
+    alias = cs_alias(model, path._element)
+    invs = [add_xml_child(model, path._element, "ownedPhysicalPathInvolvements",
+                          f"{alias}:PhysicalPathInvolvement", involved="#" + item.uuid)
+            for item in items]
     for a, b in zip(invs, invs[1:]):
         a.set("nextInvolvements", "#" + b.get("id"))  # the order, as Capella writes it
     return {"created": brief(path), "owner": brief(owner), "hops": [brief(h) for h in hops]}
@@ -197,21 +224,40 @@ def category_links(model, category: str, links: list[str], remove: bool = False)
 # --------------------------------------------------------------------- reads
 
 
-def _host(model, comp):
-    """The node a component runs on (itself if it is a node)."""
-    seen = set()
-    while comp is not None and _nature(comp) != "NODE" and comp.uuid not in seen:
-        seen.add(comp.uuid)
-        hosts = [d.location.type for d in model.search("PartDeploymentLink") if d.deployed_element is not None
-                 and d.deployed_element.type == comp and d.location is not None]
-        comp = hosts[0] if hosts else None
-    return comp
+def _hosts_of(model) -> dict[str, list]:
+    """Deployed component uuid -> the components it is deployed on (one search)."""
+    out: dict[str, list] = {}
+    for d in model.search("PartDeploymentLink"):
+        if d.deployed_element is not None and d.location is not None:
+            out.setdefault(d.deployed_element.type.uuid, []).append(d.location.type)
+    return out
+
+
+def _host_nodes(model, comp, hosts_of=None) -> set[str]:
+    """The nodes a component runs on, directly or through software it runs on.
+
+    A component may be deployed on several hosts (redundancy), so this is a
+    set; a node is its own host.
+    """
+    hosts_of = _hosts_of(model) if hosts_of is None else hosts_of
+    nodes, todo, seen = set(), [comp], set()
+    while todo:
+        c = todo.pop()
+        if c is None or c.uuid in seen:
+            continue
+        seen.add(c.uuid)
+        if _nature(c) == "NODE":
+            nodes.add(c.uuid)
+        else:
+            todo.extend(hosts_of.get(c.uuid, []))
+    return nodes
 
 
 def _ce_issue(model, ce, end_nodes, where) -> str | None:
     comps = [getattr(e, "parent", None) for e in (ce.source, ce.target)]
-    hosts = {getattr(_host(model, c), "uuid", None) for c in comps if c is not None}
-    if None in hosts or not hosts <= {n.uuid for n in end_nodes}:
+    ends = {n.uuid for n in end_nodes}
+    hosts_of = _hosts_of(model)
+    if any(c is None or not (_host_nodes(model, c, hosts_of) & ends) for c in comps):
         return (f"component exchange {ce.name!r} is allocated to {where} but its components "
                 "are not deployed on the nodes at its ends")
     return None

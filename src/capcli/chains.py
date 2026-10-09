@@ -16,12 +16,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from .model import (CapError, brief, constraint_text, endpoint_owner, layer, resolve, root_function,
+from .model import (LAYERS, CapError, brief, constraint_text, endpoint_owner, layer, resolve, root_function,
                     type_name, with_status)
 from .model import is_function as _is_function
 from .model import require_layer as _require_layer
 from .model import same_layer as _same_layer
 
+CHAIN_KINDS = ("SIMPLE", "COMPOSITE", "FRAGMENT")
 CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
 FN_INV = "FunctionalChainInvolvementFunction"
 LINK_INV = "FunctionalChainInvolvementLink"
@@ -127,6 +128,7 @@ def remove_from_chain(model, chain: str, elements: list[str]):
     """
     ch = _chain(model, chain)
     removed = []
+    gone: set[str] = set()  # exchanges whose links went with a function removed earlier in this call
     for ref in elements:
         obj = resolve(model, ref)
         if _is_function(obj):
@@ -135,10 +137,13 @@ def remove_from_chain(model, chain: str, elements: list[str]):
                 raise CapError(f"{brief(obj)} is not part of chain {ch.uuid}")
             for link in _link_involvements(ch):
                 if link.source == inv or link.target == inv:
+                    gone.add(link.involved.uuid)
                     removed.append({**_remove(model, link), "involved": brief(link.involved)})
             removed.append({**_remove(model, inv), "involved": brief(obj)})
         else:
             links = [i for i in _link_involvements(ch) if i.involved == obj]
+            if not links and obj.uuid in gone:
+                continue  # already removed with one of its functions
             if not links:
                 raise CapError(f"{brief(obj)} is not part of chain {ch.uuid}")
             for link in links:
@@ -195,6 +200,8 @@ def create_chain(
 
     kw: dict[str, Any] = {"name": name}
     if kind:
+        if kind.upper() not in CHAIN_KINDS:
+            raise CapError(f"kind must be one of {', '.join(CHAIN_KINDS)}, not {kind!r}")
         kw["kind"] = kind.upper()
     ch = par.functional_chains.create(
         "OperationalProcess" if key == "oa" else "FunctionalChain", **kw
@@ -219,6 +226,9 @@ def link_items(model, chain: str, exchange: str, elements: list[str], remove: bo
         ei = resolve(model, ref)
         if type_name(ei) != "ExchangeItem":
             raise CapError(f"Chain links carry exchange items, not {type_name(ei)}")
+        if LAYERS.index(_require_layer(ei)) > LAYERS.index(_require_layer(ch)):
+            raise CapError(f"{brief(ei)} is in a layer below the chain and is not visible from it; "
+                           "use an exchange item of the same layer or a layer above")
         present = ei in link.exchanged_items
         if remove:
             if not present:

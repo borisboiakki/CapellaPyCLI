@@ -119,7 +119,8 @@ capcli realize <lower-element> <upper-element>  # function, component, chain, ca
                                                 # state, mode or transition
 capcli set <uuid> name="new name" description="<p>html</p>"
 capcli delete <uuid>                          # refuses while referenced
-capcli --dry-run delete <uuid> --cascade      # preview what cascade removes
+capcli --dry-run delete <uuid> --cascade      # preview what cascade removes; read its
+                                              # affected_chains / text_links warnings
 
 # Functional chains (operational processes in OA)
 capcli chain list la [--involving <fn-or-exchange>]
@@ -239,7 +240,8 @@ EOF
 ```
 
 `"as"` names the element a create step makes, and `"$name"` refers to it in
-later steps. The ops and their arguments:
+later steps. A text that starts with `$` is fine (`"$5 budget"`); write `$$`
+for a literal `$name`. The ops and their arguments:
 
 | op | arguments |
 |---|---|

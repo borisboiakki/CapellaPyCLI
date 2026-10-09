@@ -134,7 +134,7 @@ def create_capability(
         if not type_name(par).endswith("Pkg") or not hasattr(par, "capabilities"):
             raise CapError(f"--parent must be a capability package, got {type_name(par)}")
     elif layer_name:
-        key = layer_name
+        key = layer_name.lower()
         par = layer(model, key).capability_pkg
     else:
         raise CapError("Give --layer or --parent (a capability package)")

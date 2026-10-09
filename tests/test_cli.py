@@ -311,3 +311,14 @@ def test_chain_link_exchange_items(run):
     run("chain", "items", SA_CHAIN, fe, step["exchange_items"][0]["uuid"], "--remove")
     assert "exchange_items" not in run("chain", "show", SA_CHAIN)["steps"][0]
     assert run("check")["ok"]
+
+
+def test_chain_remove_order_and_item_layers(run):
+    step = run("chain", "show", SA_CHAIN)["steps"][0]
+    fn, fe = step["to"]["uuid"], step["exchange"]["uuid"]
+    pa_item = run("data", "exchange-item", "create", "--layer", "pa", "--name", "Low")["created"]["uuid"]
+    data, code = run("chain", "items", SA_CHAIN, fe, pa_item, ok=False)
+    assert code == 1 and "layer below" in data["error"]
+    res = run("chain", "remove", SA_CHAIN, fn, fe)  # the exchange went with the function
+    assert fe in {r["involved"]["uuid"] for r in res["removed"]}
+    assert run("check")["ok"]

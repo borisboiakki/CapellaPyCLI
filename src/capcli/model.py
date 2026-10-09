@@ -94,6 +94,7 @@ def layer_key(obj) -> str | None:
 
 
 def root_function(model, key: str):
+    key = key.lower()
     lay = layer(model, key)
     if key != "oa":
         return lay.root_function
@@ -103,13 +104,30 @@ def root_function(model, key: str):
 
 
 def root_component(model, key: str):
-    """The top-level component; in OA, the package holding top-level entities."""
+    """The top-level component; in OA, the package holding top-level entities.
+
+    capellambse's ``root_component`` raises ``MultipleMatchesError`` as soon as
+    the Structure package holds a second non-actor component, which would make
+    every command touching the root (``check`` included) fail. Capella treats
+    the first one as the system, so that one is returned; ``check`` reports
+    the others (``ops.structure_violations``).
+    """
+    key = key.lower()
     lay = layer(model, key)
-    return lay.entity_pkg if key == "oa" else lay.root_component
+    if key == "oa":
+        return lay.entity_pkg
+    tops = top_components(lay)
+    return tops[0] if tops else None
+
+
+def top_components(lay) -> list:
+    """Non-actor components directly in a layer's Structure package."""
+    return [c for c in lay.component_pkg.components if not getattr(c, "is_actor", False)]
 
 
 def structure_pkg(model, key: str):
     """The layer's Structure package, where actors live (entities in OA)."""
+    key = key.lower()
     lay = layer(model, key)
     return lay.entity_pkg if key == "oa" else lay.component_pkg
 
@@ -124,6 +142,7 @@ def resolve(model, ref: str):
     """
     if ":" in ref:
         lay, _, what = ref.partition(":")
+        lay, what = lay.lower(), what.lower()
         if what in ("root-function", "root-activity"):
             return root_function(model, lay)
         if what in ("root-component", "root-entity"):
@@ -302,6 +321,17 @@ def datavalue_alias(model, el) -> str:
     _, frag = model._loader._find_fragment(el)
     version = model.info.capella_version or "7.0.0"
     return frag.add_namespace(DATAVALUE_URI.format(VERSION=version), DATAVALUE_ALIAS)
+
+
+CS_URI = "http://www.polarsys.org/capella/core/cs/{VERSION}"
+CS_ALIAS = "org.polarsys.capella.core.data.cs"
+
+
+def cs_alias(model, el) -> str:
+    """Namespace prefix for cs metaclasses (interfaces) in ``el``'s file (added if missing)."""
+    _, frag = model._loader._find_fragment(el)
+    version = model.info.capella_version or "7.0.0"
+    return frag.add_namespace(CS_URI.format(VERSION=version), CS_ALIAS)
 
 
 def add_xml_child(model, parent_el, tag: str, xtype: str, **attrs: str):

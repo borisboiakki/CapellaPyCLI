@@ -189,3 +189,20 @@ def test_state_and_transition_realization(run, model):
     assert code == 1
     run("delete", ids["on"], "--cascade")  # realizations go with the realized state
     assert run("check")["ok"]
+
+
+def test_duplicate_triggers_and_effects_are_written_once(run, model):
+    fn = run("create", "function", "--parent", "sa:root-function", "--name", "twice")["created"]["uuid"]
+    fe = run("list", "sa", "function-exchanges")["items"][0]["uuid"]
+    res = run("batch", input=json.dumps([
+        {"op": "create-state-machine", "as": "sm", "owner": "sa:root-component"},
+        {"op": "add-state", "as": "a", "parent": "$sm", "name": "A"},
+        {"op": "add-state", "as": "b", "parent": "$sm", "name": "B"},
+        {"op": "add-transition", "as": "t", "source": "$a", "target": "$b",
+         "effects": [fn, fn], "triggers": [fe, fe]},
+    ]))
+    t = next(s["created"]["uuid"] for s in res["steps"] if s.get("as") == "t")
+    el = _el(_xml(model), t)
+    assert (_ids(el.get("effect")), _ids(el.get("triggers"))) == ([fn], [fe])
+    run("delete", fn, "--cascade")  # used to crash on the second copy
+    assert run("check")["ok"]

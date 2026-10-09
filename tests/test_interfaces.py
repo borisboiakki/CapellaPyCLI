@@ -108,3 +108,16 @@ def test_check_fixes_capellambse_plural_attribute(run, model):
     assert run("check", "--fix")["saved"]
     assert run("check")["ok"]
     assert ids["u"] in {x["uuid"] for x in run("show", ids["i"])["provided_by"]}
+
+
+def test_interface_allocation_cycle_is_refused(run):
+    ids = _ids(run("batch", input=json.dumps([
+        {"op": "create-interface", "as": "a", "layer": "la", "name": "A"},
+        {"op": "create-interface", "as": "b", "layer": "la", "name": "B"},
+        {"op": "create-interface", "as": "c", "layer": "la", "name": "C"},
+        {"op": "allocate-interface", "element": "$a", "interface": "$b"},
+        {"op": "allocate-interface", "element": "$b", "interface": "$c"},
+    ])))
+    data, code = run("interface", "allocate", ids["c"], ids["a"], ok=False)
+    assert code == 1 and "cycle" in data["error"]
+    assert run("check")["ok"]

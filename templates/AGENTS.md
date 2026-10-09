@@ -100,7 +100,8 @@ capcli realize <la-function> <sa-function>    # traceability to the layer above
                                               # (also states, modes and transitions)
 capcli set <uuid> name="new name" description="<p>html</p>"
 capcli delete <uuid>                          # refuses while referenced
-capcli --dry-run delete <uuid> --cascade      # preview what cascade removes
+capcli --dry-run delete <uuid> --cascade      # preview what cascade removes; read its
+                                              # affected_chains / text_links warnings
 
 # Functional chains (operational processes in OA)
 capcli chain list la [--involving <fn-or-exchange>]
@@ -252,3 +253,4 @@ functions), `create-link-category` (`"parent"`, `"name"`), `link-category-links`
 (`"category"`, `"links"`, `"remove"`), `reorder` (`"element"`, `"before"`, `"after"`,
 `"first"`, `"last"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.
+A text that starts with `$` is fine (`"$5 budget"`); write `$$` for a literal `$name`.

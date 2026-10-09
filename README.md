@@ -14,7 +14,7 @@ capcli handles them for you:
 | Trap | What capcli does |
 |---|---|
 | `create()` can pick the wrong metaclass (e.g. a `LogicalFunction` under an `OperationalActivity`) | Always passes the right type per layer (OA/SA/LA/PA) |
-| Removing an element leaves `target=""` / dangling references | `delete` refuses while the element is referenced. `--cascade` also removes exchanges, allocations, Parts and orphaned ports |
+| Removing an element leaves `target=""` / dangling references | `delete` refuses while the element is referenced. `--cascade` also removes the links that depend on it (exchanges, allocations, Parts, orphaned ports), never the elements that merely point to it |
 | Functional/component exchanges need ports and the right owner | Ports are created and the exchange is placed in the common parent |
 | `PhysicalComponent.components` is a computed list | Uses `owned_components` |
 | capellambse accepts sub-systems in SA and actors inside the system, both against Arcadia | `create component` refuses them, and `check` reports existing ones under `structure` |
@@ -161,7 +161,7 @@ Kinds available in `capcli list <layer> <kind>`:
 | Element or relation | Create | Modify | Delete | Notes |
 |---|:-:|:-:|:-:|---|
 | Functions (activities in OA) | ✅ | ✅ | ✅ | All four layers. Created below a parent function, with the right metaclass for the layer |
-| Components (entities in OA), actors | ✅ | ✅ | ✅ | `--actor`. `--nature node\|behavior` in PA. The Part that Capella needs is created automatically. Arcadia rules are enforced: no components inside the SA System (it's a black box; decompose in LA), and actors only in the Structure package (`<layer>:structure`). `is_actor` can't be toggled with `set` |
+| Components (entities in OA), actors | ✅ | ✅ | ✅ | `--actor`. `--nature node\|behavior` in PA. The Part that Capella needs is created automatically. Arcadia rules are enforced: no components inside the SA System (it's a black box; decompose in LA), actors only in the Structure package (`<layer>:structure`), and in LA/PA no second top-level component next to the logical/physical system (it would break capellambse; `check` reports existing ones). `is_actor` can't be toggled with `set` |
 | Functional exchanges | ✅ | ✅ | ✅ | Ports are created automatically. In OA, activities are connected directly |
 | Component exchanges (communication means in OA) | ✅ | ✅ | ✅ | `--kind flow\|delegation\|assembly`. Component ports are created automatically |
 | Function → component allocation | ✅ | ✅ | ✅ | `allocate`, `unallocate`, `allocate --move` |
@@ -190,7 +190,7 @@ Kinds available in `capcli list <layer> <kind>`:
 | Transitions (triggers, effects, guard, trigger description) | ✅ | | ✅ | `mode transition`. Deleting a state deletes its transitions (with `--cascade`); deleting an effect function or trigger only detaches it |
 | Functions, chains and capabilities available in a state or mode | ✅ | | ✅ | `mode available <state> <element>... [--remove]` |
 | Entry, exit and do activities of a state or mode | ✅ | | ✅ | `mode activity <state> --entry/--exit/--do <function> [--remove]`. Functions of the same layer. Deleting the function only detaches it |
-| Classes, unions and properties (type, multiplicity, association/aggregation/composition) | ✅ | ✅ | ✅ | `data class create`, `data union`, `data property add`. A property's type must come from the same layer or a layer above |
+| Classes, unions and properties (type, multiplicity, association/aggregation/composition) | ✅ | ✅ | ✅ | `data class create`, `data union`, `data property add`. A property's type must come from the same layer or a layer above. Plain attributes have no aggregation kind (`--kind unset`, the default), as in Capella; union members are written as `UnionProperty` |
 | Basic types (boolean, integer, float, string, physical quantity) | ✅ | ✅ | ✅ | `data type --kind …`. Booleans get their True/False literals, as in Capella. Units of physical quantities aren't set |
 | Collections | ✅ | ✅ | ✅ | `data collection --type <item type> [--min] [--max]` (default `0..*`) |
 | Generalization (super-class) of classes, unions, enumerations, collections | ✅ | | ✅ | `data generalize <element> <super> [--remove]`. Same kind, visible layer, no cycles |
@@ -200,8 +200,8 @@ Kinds available in `capcli list <layer> <kind>`:
 | Progress status (DRAFT, TO_BE_REVIEWED, …) of any element | | ✅ | ✅ | `status set VALUE <uuid>...` or `set <uuid> status=VALUE`. Only the project's ProgressStatus values are accepted. `NOT_SET` clears |
 | Existing requirement text | | ✅ | | `set <req> text="<p>…</p>"` |
 | Existing property values (PVMT) | | ✅ | | `set <property value> value=…` |
-| Any element inside a layer | | | ✅ | `delete` refuses while the element is still referenced. `--cascade` also removes the exchanges, allocations, realizations, involvements, Parts and orphaned ports that depend on it. Packages and layer roots are never deleted |
-| Several changes at once | ✅ | ✅ | ✅ | `batch`: all or nothing, and later steps can refer to elements created earlier (`"as"` / `"$name"`) |
+| Any element inside a layer | | | ✅ | `delete` refuses while the element is still referenced (a component's own Parts go with it). `--cascade` also removes the exchanges, allocations, realizations, involvements and ports that depend on it, but only *links* whose end is deleted: an element that merely points to it (a capability's precondition, a transition's guard, a port's interface) is kept and the reference cleared. Ports that still provide interfaces or carry items are kept. The result warns about functional chains that lost a part (`affected_chains`) and texts that still link to a deleted element (`text_links`). A layer's root packages, function and component are never deleted |
+| Several changes at once | ✅ | ✅ | ✅ | `batch`: all or nothing, and later steps can refer to elements created earlier (`"as"` / `"$name"`; `$$` for a literal `$name`) |
 
 ### Not possible today
 
