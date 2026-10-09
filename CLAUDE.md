@@ -50,6 +50,7 @@ src/capcli/
   capabilities.py  capabilities (OA/SA/LA/PA) and missions (SA)
   status.py        progress status (ProgressStatus values)
   data.py          data model: classes, properties, enumerations, exchange items
+  modes.py         modes and states: state machines, regions, states, transitions
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -60,6 +61,7 @@ tests/
   test_structure.py     Arcadia structure rules
   test_status.py        progress status
   test_data.py          data model
+  test_modes.py         modes and states
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -74,13 +76,16 @@ chains.py         ← imports model
 capabilities.py   ← imports model
 status.py         ← imports model
 data.py           ← imports model
+modes.py          ← imports model
 ops.py            ← imports model and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
 `model.py` depends on nothing in the package. The feature modules
-(`chains.py`, `capabilities.py`, `status.py`, `data.py`) import only from `model.py`.
-Helpers they share, such as `status_name` / `with_status`, live in `model.py`. `ops.py` imports both and
+(`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`) import only
+from `model.py`. Helpers they share, such as `status_name` / `with_status` and
+`add_xml_child` / `datavalue_alias` (creating elements capellambse can't),
+live in `model.py`. `ops.py` imports both and
 merges their `OPS` dicts into its registry. Keep it that way: a feature
 module importing `ops` creates an import cycle (this happened once, and is
 why the shared helpers live in `model.py`).
@@ -154,13 +159,17 @@ lxml tree directly (`obj._element`, `model._loader`):
   involvements, Parts, ports, include/extend/generalization/exploitation),
   repeated until nothing new is found. Ports left without exchanges are
   removed too. References in `_DETACHABLE_ATTRS` (exchange items carried by
-  exchanges and ports) are *detached*: the ID is removed from the list and
-  the carrier is kept. Any other referrer blocks the delete. Diagram references are
+  exchanges and ports, `availableInStates`, a transition's `effect` and
+  `triggers`) are *detached* under `--cascade`: the ID is removed from the
+  list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state caches
+  `involvedStates` / `referencedStates`) are updated even without
+  `--cascade`. Any other referrer blocks the delete. Diagram references are
   only reported as a warning.
 - Removing an element: `model._loader.idcache_remove(el)` and then
   `el.getparent().remove(el)`. Always do both.
 - `check`: dangling refs, empty required refs, realization links without
-  `sourceElement` (`--fix` fills them in), and Arcadia structure violations.
+  `sourceElement`, stale state caches (`--fix` repairs both), and Arcadia
+  structure violations.
 
 ## capellambse 0.8.1 traps (all found the hard way)
 
@@ -188,6 +197,9 @@ Check these again when upgrading capellambse.
 | `EnumerationLiteral` misses `abstractType` (back-reference to its enumeration); `ExchangeItemElement` misses `direction="UNSET" composite="true"` | Set explicitly in `data.py` |
 | `DataPkg.enumerations` is a filter, but creating through it works; `ExchangeItemElement.abstract_type` is deprecated | Create enumerations with `data_types.create("Enumeration")`; use `type` |
 | Exchange items: functional exchanges use `exchanged_items`, function ports `exchange_items` (`incoming`/`outgoingExchangeItems` in XML), component exchanges `convoyed_informations` (`allocated_exchange_items` is deprecated); component ports carry interfaces, not items | `data.CARRIER_ATTR` |
+| Regions don't get `involvedStates`, states don't get `referencedStates` or their own sub-region "region" (Capella always has all three) | `modes.sync_caches()` after every state change; `add_state` creates the region; `check --fix` rebuilds caches |
+| A new `Constraint` has no `ownedSpecification`, and `specification[...] = …` raises (it is `None`) | `modes._set_guard` writes the `OpaqueExpression` (`bodies` + `languages`) with `model.add_xml_child` |
+| `StateTransition.effects` is deprecated; the accessor is `effect` (a list) | Use `effect` |
 | `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
@@ -200,19 +212,21 @@ Check these again when upgrading capellambse.
    to the one directly above (`oa ← sa ← la ← pa`). Data is the exception:
    a type or exchange item may come from the same layer or any layer above
    (an LA property typed by SA's `Integer`), never from a layer below.
-3. **Arcadia structure** (`ops._check_structure_rules`,
+3. **Modes vs states**: a region holds modes or states, never both, and at
+   most one initial pseudo-state (`modes.add_state`).
+4. **Arcadia structure** (`ops._check_structure_rules`,
    `ops.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
    - actors (SA/LA/PA) live in the Structure package, never inside a component;
    - `is_actor` can't be toggled with `set`.
-4. **Every realization has both ends** (`targetElement` and `sourceElement`).
-5. **delete never leaves a dangling reference.** `capcli check` must stay
+5. **Every realization has both ends** (`targetElement` and `sourceElement`).
+6. **delete never leaves a dangling reference.** `capcli check` must stay
    `ok` after every write in every test.
-6. **Ops never save.** Only `write_command`, `batch` and `check --fix` save,
+7. **Ops never save.** Only `write_command`, `batch` and `check --fix` save,
    and never after an error.
-7. **Errors say what to do instead**: the command, the shortcut, the
+8. **Errors say what to do instead**: the command, the shortcut, the
    allowed values.
-8. **JSON keys are an API.** Add keys, but don't rename or remove them.
+9. **JSON keys are an API.** Add keys, but don't rename or remove them.
 
 ## How to add a feature (checklist)
 
@@ -336,8 +350,8 @@ reload, `check` ok). Only capcli commands are missing. Roughly in order:
 3. ~~Data model and exchange items~~: done (`capcli data`). Still missing:
    unions, collections, physical quantities, creating basic types, class
    generalization, exchange items on chain links.
-4. **Modes and states**: state machines, regions, states and modes,
-   transitions, and `available_in_states`.
+4. ~~Modes and states~~: done (`capcli mode`). Still missing: entry/exit/do
+   activities, history and entry/exit pseudo-states, state realizations.
 5. **Physical architecture**: physical ports and links, deployment (an
    `InstanceDeploymentLink` from the node's *Part* to the behaviour
    component's *Part*), physical paths (untested).

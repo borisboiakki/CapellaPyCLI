@@ -283,6 +283,38 @@ def same_layer(a, b) -> str:
     return ka
 
 
+XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
+DATAVALUE_URI = "http://www.polarsys.org/capella/core/information/datavalue/{VERSION}"
+DATAVALUE_ALIAS = "org.polarsys.capella.core.data.information.datavalue"
+
+
+def datavalue_alias(model, el) -> str:
+    """Namespace prefix for datavalue metaclasses in ``el``'s file (added if missing)."""
+    _, frag = model._loader._find_fragment(el)
+    version = model.info.capella_version or "7.0.0"
+    return frag.add_namespace(DATAVALUE_URI.format(VERSION=version), DATAVALUE_ALIAS)
+
+
+def add_xml_child(model, parent_el, tag: str, xtype: str, **attrs: str):
+    """Create a child element with a fresh id, registered in the id cache.
+
+    For elements capellambse cannot create through its API (multiplicities,
+    constraint specifications). ``xtype`` is the full ``prefix:Metaclass``.
+    """
+    from lxml import etree
+
+    loader = model._loader
+    # new_uuid() checks on exit that the id is used, so index inside it.
+    with loader.new_uuid(parent_el) as uid:
+        child = etree.SubElement(parent_el, tag)
+        child.set(XSI_TYPE, xtype)
+        child.set("id", uid)
+        for k, v in attrs.items():
+            child.set(k, v)
+        loader.idcache_index(child)
+    return child
+
+
 NOT_SET = "NOT_SET"
 
 
