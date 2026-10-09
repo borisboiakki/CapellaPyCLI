@@ -27,8 +27,9 @@ matches what Capella itself writes.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest -q                       # ~2 min, all tests must pass
-.venv/bin/pip install pyflakes && .venv/bin/python -m pyflakes src tests  # no linter config; keep it clean
+.venv/bin/pytest -q                       # parallel (pytest-xdist), < 1 min; all must pass
+.venv/bin/ruff check src tests            # config in pyproject.toml; keep it clean
+.venv/bin/mypy src                        # keep it at "no issues"
 .venv/bin/capcli -m tests/data/model info # try it on the test model
 ```
 
@@ -43,9 +44,10 @@ src/capcli/
   cli.py           click commands, JSON output, error handling, --dry-run, batch entry
   model.py         loading, element lookup/shortcuts, layer + metaclass maps,
                    JSON serialization (brief/detail), shared predicates
-  ops.py           core write operations (create/allocate/realize/set/delete),
-                   XML-level helpers (iter_refs, delete cascade, check),
-                   Arcadia structure rules, batch runner and the OPS registry
+  ops.py           core write operations (create/allocate/realize/set),
+                   batch runner and the OPS registry
+  integrity.py     XML reference machinery: iter_refs, delete (cascade/detach),
+                   check, and the Arcadia structure rules
   chains.py        functional chains / operational processes
   capabilities.py  capabilities (OA/SA/LA/PA) and missions (SA)
   status.py        progress status (ProgressStatus values)
@@ -59,6 +61,7 @@ templates/
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
 tests/
   conftest.py      `model` (fresh copy of the test model) and `run` fixtures
+  helpers.py       shared test helpers: capella_xml, by_id, created_ids, named, …
   test_cli.py      core commands, and functional chains (at the end)
   test_capabilities.py  capabilities, missions, realization sources
   test_structure.py     Arcadia structure rules
@@ -87,7 +90,8 @@ modes.py          ← imports model
 physical.py       ← imports model
 structure.py      ← imports model
 interfaces.py     ← imports model
-ops.py            ← imports model and every feature module (merges their OPS)
+integrity.py      ← imports model, modes and interfaces (caches check repairs)
+ops.py            ← imports model, integrity and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
@@ -95,9 +99,11 @@ cli.py            ← imports everything
 (`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`,
 `physical.py`, `structure.py`, `interfaces.py`) import only
 from `model.py`. Helpers they share, such as `status_name` / `with_status` and
-`add_xml_child` / `datavalue_alias` (creating elements capellambse can't),
+`add_xml_child` / `datavalue_alias` / `cs_alias` (creating elements
+capellambse can't), `remove_xml` / `remove_link` (removing them),
 `ancestors` / `common_owner` (where an exchange or link belongs),
-live in `model.py`. `ops.py` imports both and
+`toggle` (add/remove in a reference list), `label` (an element in an error
+message) and `CHAIN_TYPES` live in `model.py`. `ops.py` imports both and
 merges their `OPS` dicts into its registry. Keep it that way: a feature
 module importing `ops` creates an import cycle (this happened once, and is
 why the shared helpers live in `model.py`).
@@ -107,8 +113,10 @@ why the shared helpers live in `model.py`).
 1. `cli()` builds a `Ctx` holding the model path (`--model`, then
    `$CAPELLA_MODEL`, then the only `.aird` under the current directory) and the
    `--dry-run` flag. The model is loaded lazily on first access.
-2. A **read** command (`@click.pass_obj` + `@handled`) resolves elements and
-   calls `emit()`.
+2. A **read** command uses `@read_command`: the function gets the loaded model
+   plus the CLI arguments and returns the JSON. (A few commands with extra
+   output logic still use `@click.pass_obj` + `@handled` and call `emit()`.)
+   `show` picks a dedicated view from `SHOW_VIEWS` (first match wins).
 3. A **write** command uses `@write_command`. The function gets the loaded
    model plus the CLI arguments, calls an operation, and returns a dict.
    The decorator then saves the model (unless `--dry-run`) and emits
@@ -164,14 +172,15 @@ A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
   `show_mission` for those kinds. These return an `issues` list (strings)
   that agents are told to keep empty.
 
-### Low-level XML work (ops.py)
+### Low-level XML work (integrity.py)
 
 capellambse's high-level API is used for creating things. Some jobs go to the
 lxml tree directly (`obj._element`, `model._loader`):
 
 - `iter_refs(model)`: every `#id` reference in semantic files (or visual ones,
   with `visual=True`).
-- `delete`: computes everything that references the element's subtree
+- `delete` (`_collect` → `_referrer_verdict` → `_detach` →
+  `_remove_orphan_ports`): computes everything that references the element's subtree
   (a component's own Parts are added up front). Without `--cascade`, it
   refuses. With `--cascade`, it removes a referrer only if its metaclass
   matches `_CASCADABLE` (exchanges, allocations, realizations, involvements,
@@ -199,8 +208,8 @@ lxml tree directly (`obj._element`, `model._loader`):
   see `iter_text_links`) and a diagram warning.
 - `iter_refs` skips free-text attributes (`_NON_REF_ATTRS`, `ReqIF*`): a
   name like `#42` is not a reference.
-- Removing an element: `model._loader.idcache_remove(el)` and then
-  `el.getparent().remove(el)`. Always do both.
+- Removing an element: `model.remove_xml(model, el)` (id cache, then the
+  tree). Never do only one of the two.
 - `check`: dangling refs, empty required refs, realization links without
   `sourceElement`, stale state caches, interface implementations written by
   capellambse with the wrong attribute (`--fix` repairs all three), and
@@ -248,7 +257,7 @@ Check these again when upgrading capellambse.
 | A new `BooleanType` has no `True`/`False` literals (Capella always writes them, with `abstractType` back to the type and `value="true"` on True); a FLOAT `NumericType` lacks `discrete="false"` | `data.create_type` writes them at XML level |
 | Constraints (guards, `preCondition`/`postCondition`) are created without `ownedSpecification`, and replacing one leaves the old `Constraint` behind | `model.set_constraint` removes the old one and writes the `OpaqueExpression` (`bodies` + `languages`); `model.constraint_text` reads it |
 | State realizations are `AbstractStateRealization` (in `ownedAbstractStateRealizations`, accessor `realized_states`); transitions use `realized_transitions` | `ops.realize` handles both (same metaclass on both ends) |
-| `PhysicalLinkCategory.links` is a plain reference list, and the test model has no Capella-written category | `physical.category_links`; `delete` detaches links from categories via `ops._DETACHABLE_TYPED` |
+| `PhysicalLinkCategory.links` is a plain reference list, and the test model has no Capella-written category | `physical.category_links`; `delete` detaches links from categories via `integrity._DETACHABLE_TYPED` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
 
@@ -267,8 +276,8 @@ Check these again when upgrading capellambse.
 4. **Physical architecture**: physical ports and links only on node
    components; a node is never deployed on a behaviour component
    (`physical.py`).
-5. **Arcadia structure** (`ops._check_structure_rules`,
-   `ops.structure_violations`):
+5. **Arcadia structure** (`integrity._check_structure_rules`,
+   `integrity.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
    - actors (SA/LA/PA) live in the Structure package, never inside a component;
    - in LA/PA the system is the only non-actor component directly in the
@@ -301,8 +310,8 @@ Check these again when upgrading capellambse.
    you can create.
 4. **Register it** in the module's `OPS`, and in `ops.py` if it's a new
    module. Add batch argument aliases in `run_batch` only if unavoidable.
-5. **Add the CLI command** with `@write_command`, or `@click.pass_obj` +
-   `@handled` for reads. Put it in a click group when there are several
+5. **Add the CLI command** with `@write_command`, or `@read_command` for
+   reads (`@in_package("data")` gives the usual `--layer`/`--parent` pair). Put it in a click group when there are several
    related commands.
 6. **Make it visible**: `show` / `detail` / a dedicated `show_*` with an
    `issues` list for anything with consistency rules.
@@ -320,7 +329,7 @@ Check these again when upgrading capellambse.
    - the batch examples in both are executed by the tests;
    - update the README tables: "Reading", "Creating and modifying",
      "Not possible today", and the trap table at the top.
-10. **Run** `pytest -q` and `pyflakes src tests`. Before a PR, run one batch
+10. **Run** `pytest -q`, `ruff check src tests` and `mypy src`. Before a PR, run one batch
     end to end on a scratch copy and inspect `git diff` of the `.capella` file.
 
 Probe script pattern:
@@ -345,6 +354,10 @@ computed and read-only. A `Backref` is read-only.
 - `conftest.py`: `model` copies `tests/data/model` into `tmp_path`.
   `run(*args, input=None, ok=True)` invokes the CLI on it and returns the
   parsed JSON, or `(json, exit_code)` with `ok=False`.
+- Pick test-model elements by name with `helpers.named(items, "Campus")`,
+  never by position (`items[1]`): positions change when the fixture does.
+- Tests run in parallel; each gets its own model copy, so keep them
+  independent.
 - Every `run` call reloads the model from disk, so assertions after a write
   also prove the change survived a save and reload.
 - Useful test-model facts:
@@ -377,11 +390,13 @@ computed and read-only. A `Backref` is read-only.
 
 ## Known technical debt
 
-- `CHAIN_TYPES` is defined three times (`chains`, `capabilities`, `ops`), and
-  `_remove(model, link)` twice (`chains`, `capabilities`). Both belong in
-  `model.py`.
-- `ops.py` mixes core ops and XML utilities. `iter_refs` / `delete` / `check`
-  could move to their own `integrity.py`.
+- capellambse internals (`_element`, `_loader`) are still used directly in
+  most modules. Most of the XML work now goes through `model.py` helpers
+  (`add_xml_child`, `remove_xml`, the namespace aliases); new code should
+  too, so a capellambse upgrade has fewer places to check.
+- Some ops report "unchanged" as a bool (`{"unchanged": true}`), others as a
+  list of elements. Both are API now; new list ops should use `toggle` and
+  the list form.
 - `delete` and `check` scan the whole model on every call, which is fine for
   the test model. Watch performance on large models (thousands of elements).
 - Each CLI call reloads the model, which takes a few seconds on big models.

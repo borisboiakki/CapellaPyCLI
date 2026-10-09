@@ -269,7 +269,9 @@ capcli works around, the rules to keep, and a checklist for adding features.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest
+.venv/bin/pytest -q            # runs in parallel
+.venv/bin/ruff check src tests
+.venv/bin/mypy src
 ```
 
 Tests run against capellambse's Capella 7.0 test model, vendored in
