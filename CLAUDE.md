@@ -260,8 +260,10 @@ Check these again when upgrading capellambse.
    to the one directly above (`oa ← sa ← la ← pa`). Data is the exception:
    a type or exchange item may come from the same layer or any layer above
    (an LA property typed by SA's `Integer`), never from a layer below.
-3. **Modes vs states**: a region holds modes or states, never both, and at
-   most one initial pseudo-state (`modes.add_state`).
+3. **Modes vs states**: a state machine holds modes or states, never both,
+   in any of its regions (Arcadia's recommended practice; `modes._holder_kinds`),
+   and a region has at most one initial pseudo-state (`modes.add_state`).
+   `mode show` reports machines that already mix them.
 4. **Physical architecture**: physical ports and links only on node
    components; a node is never deployed on a behaviour component
    (`physical.py`).

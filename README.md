@@ -186,7 +186,7 @@ Kinds available in `capcli list <layer> <kind>`:
 | Physical link categories | ✅ | ✅ | ✅ | `pa category --parent …`, `pa categorize <category> <link>... [--remove]`. Deleting a link detaches it from its categories. No Capella-written example was available: check the first one in Capella |
 | Physical paths | ✅ | | ✅ | `pa path --link … --link …` from consecutive links. Deleting a link with `--cascade` also deletes the paths through it |
 | Component exchange → physical link/path; component port → physical port | ✅ | | ✅ | `allocate` / `unallocate` |
-| State machines, states, modes and pseudo-states (initial, final, terminate, choice, fork, join, shallow/deep history, entry/exit point), sub-states | ✅ | ✅ | ✅ | `mode machine create`, `mode add`. A region never mixes modes and states, and holds one initial state at most |
+| State machines, states, modes and pseudo-states (initial, final, terminate, choice, fork, join, shallow/deep history, entry/exit point), sub-states | ✅ | ✅ | ✅ | `mode machine create`, `mode add`. A state machine never mixes modes and states (sub-regions included), as Arcadia recommends, and each region holds one initial state at most. `mode show` reports machines that already mix them |
 | Transitions (triggers, effects, guard, trigger description) | ✅ | | ✅ | `mode transition`. Deleting a state deletes its transitions (with `--cascade`); deleting an effect function or trigger only detaches it |
 | Functions, chains and capabilities available in a state or mode | ✅ | | ✅ | `mode available <state> <element>... [--remove]` |
 | Entry, exit and do activities of a state or mode | ✅ | | ✅ | `mode activity <state> --entry/--exit/--do <function> [--remove]`. Functions of the same layer. Deleting the function only detaches it |

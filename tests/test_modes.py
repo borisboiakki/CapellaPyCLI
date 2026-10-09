@@ -1,5 +1,7 @@
 import json
 
+import capellambse
+
 from lxml import etree
 
 
@@ -82,7 +84,7 @@ def test_xml_caches_and_guard_match_capella(run, model):
 def test_rules(run):
     ids = _build(run)
     for args, needle in [
-        (("mode", "add", ids["sm"], "--name", "M", "--kind", "mode"), "does not mix"),
+        (("mode", "add", ids["sm"], "--name", "M", "--kind", "mode"), "not to mix modes and states"),
         (("mode", "add", ids["sm"], "--name", "i2", "--kind", "initial"), "already has an initial"),
         (("mode", "transition", ids["off"], ids["init"]), "initial state cannot"),
         (("mode", "machine", "create", ids["fn"]), "components, actors or entities"),
@@ -206,3 +208,16 @@ def test_duplicate_triggers_and_effects_are_written_once(run, model):
     assert (_ids(el.get("effect")), _ids(el.get("triggers"))) == ([fn], [fe])
     run("delete", fn, "--cascade")  # used to crash on the second copy
     assert run("check")["ok"]
+
+
+def test_no_modes_and_states_in_one_machine(run, model):
+    ids = _build(run)  # a machine with states, On has a sub-region
+    data, code = run("mode", "add", ids["on"], "--name", "Eco", "--kind", "mode", ok=False)
+    assert code == 1 and "not to mix modes and states" in data["error"]  # nested regions count too
+    data, code = run("mode", "add", ids["sm"], "--name", "Eco", "--kind", "mode", ok=False)
+    assert code == 1
+    run("mode", "add", ids["on"], "--name", "Pause", "--kind", "choice")  # pseudo-states are fine
+    m = capellambse.MelodyModel(str(model / "Model Test 7.0.aird"))  # as another tool could write it
+    m.by_uuid(ids["on"]).regions[0].states.create("Mode", name="Eco")
+    m.save()
+    assert "machine mixes modes and states" in " ".join(run("mode", "show", ids["sm"])["issues"])

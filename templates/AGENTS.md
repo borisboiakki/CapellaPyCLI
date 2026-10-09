@@ -41,8 +41,8 @@ text edit silently breaks them.
 8. After changing a capability, run `capcli capability show <cap>` and look
    at its `issues`. Every SA/LA/PA capability should realize one in the layer
    above, and involve the components that its functions are allocated to.
-9. A region holds either **modes** or **states**, never both, and each
-   sub-region gets at most one initial state. capcli enforces this. Check
+9. A state machine holds either **modes** or **states**, never both (sub-regions
+   included), and each region gets at most one initial state. capcli enforces this. Check
    `capcli mode show <machine>` for `issues` after editing a state machine.
 10. In PA, physical ports and links connect **node** components; behaviour
     components are **deployed** on nodes (`capcli pa deploy`). A component

@@ -63,7 +63,7 @@ the model:
      `capcli pa show <link|path>` (its components must be deployed on the
      nodes at its ends);
    - for every state machine you touched, check `capcli mode show <machine>`
-     (a region holds modes or states, never both);
+     (a state machine holds modes or states, never both);
    - for every capability you touched, check `capcli capability show <cap>`.
      Every SA/LA/PA capability should realize one in the layer above, and
      involve the components that its functions are allocated to.
