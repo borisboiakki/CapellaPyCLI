@@ -18,10 +18,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from lxml import etree
-
 from .model import (
     LAYERS,
+    add_xml_child,
+    datavalue_alias,
     CapError,
     brief,
     layer,
@@ -31,10 +31,6 @@ from .model import (
     type_name,
     with_status,
 )
-
-XSI_TYPE = "{http://www.w3.org/2001/XMLSchema-instance}type"
-DATAVALUE_URI = "http://www.polarsys.org/capella/core/information/datavalue/{VERSION}"
-DATAVALUE_ALIAS = "org.polarsys.capella.core.data.information.datavalue"
 
 TYPE_METACLASSES = (
     "Class", "Union", "Collection", "Enumeration", "BooleanType",
@@ -99,25 +95,12 @@ def _set_cards(model, obj, min_card, max_card) -> None:
     if hi != "*" and int(hi) < int(lo):
         raise CapError(f"Maximum multiplicity {hi} is lower than minimum {lo}")
     el = obj._element
-    loader = model._loader
-    alias = _datavalue_alias(model, el)
+    alias = datavalue_alias(model, el)
     for tag, value in (("ownedMinCard", lo), ("ownedMaxCard", hi)):
         for old in el.findall(tag):
-            loader.idcache_remove(old)
+            model._loader.idcache_remove(old)
             el.remove(old)
-        # new_uuid() checks on exit that the id is used, so index inside it.
-        with loader.new_uuid(el) as uid:
-            child = etree.SubElement(el, tag)
-            child.set(XSI_TYPE, f"{alias}:LiteralNumericValue")
-            child.set("id", uid)
-            child.set("value", value)
-            loader.idcache_index(child)
-
-
-def _datavalue_alias(model, el) -> str:
-    _, frag = model._loader._find_fragment(el)
-    version = model.info.capella_version or "7.0.0"
-    return frag.add_namespace(DATAVALUE_URI.format(VERSION=version), DATAVALUE_ALIAS)
+        add_xml_child(model, el, tag, f"{alias}:LiteralNumericValue", value=value)
 
 
 def _cards(obj) -> tuple[str | None, str | None]:

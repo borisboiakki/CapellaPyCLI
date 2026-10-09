@@ -1,6 +1,6 @@
 ---
 name: capella-model
-description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status and the data model (classes, enumerations, exchange items) in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
+description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status, the data model (classes, enumerations, exchange items) and modes and states in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
 compatibility: Needs the capcli command on PATH (pip install from the CapellaPyCLI repo, Python 3.10+). Works with OpenCode and Claude Code.
 metadata:
   tool: capcli
@@ -59,6 +59,8 @@ the model:
    - run `capcli validate --layer <layer>`;
    - for every chain you touched, `capcli chain show <chain>` must have an empty
      `issues` list, unless the user asked for a partial chain;
+   - for every state machine you touched, check `capcli mode show <machine>`
+     (a region holds modes or states, never both);
    - for every capability you touched, check `capcli capability show <cap>`.
      Every SA/LA/PA capability should realize one in the layer above, and
      involve the components that its functions are allocated to.
@@ -144,6 +146,15 @@ capcli data exchange-item add-element <exchange-item> --name pos --type <type> [
 capcli data assign <exchange-item> <functional-exchange|function-port|component-exchange>... [--remove]
 capcli data show <uuid>                       # properties, literals, elements, usage, issues
 
+# Modes and states
+capcli mode list sa                           # state machines of a layer, with owner
+capcli mode machine create sa:root-component  # "<owner> State Machine" + Default Region
+capcli mode add <machine|region|state> --name Off [--kind state|mode|initial|final|choice|…]
+capcli mode transition <source> <target> [--trigger <exchange|item>] [--effect <function>] \
+    [--guard "power > 10"] [--trigger-description "power on"]
+capcli mode available <state> <function|chain|capability>... [--remove]
+capcli mode show <machine|state>              # tree, transitions, availability, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -213,3 +224,7 @@ later steps. The ops and their arguments:
 | `create-exchange-item` | `name`, `layer` or `parent`, `mechanism`, `description` |
 | `add-exchange-item-element` | `exchange_item`, `name`, `type`, `min`, `max` |
 | `assign-exchange-item` | `exchange_item`, `elements`, `remove` |
+| `create-state-machine` | `owner`, `name` |
+| `add-state` | `parent`, `name`, `kind`, `description` |
+| `add-transition` | `source`, `target`, `triggers`, `effects`, `trigger_description`, `guard`, `name` |
+| `set-available` | `state`, `elements`, `remove` |

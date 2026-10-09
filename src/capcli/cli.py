@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, ops, status
+from . import __version__, capabilities, chains, data, modes, ops, status
 from .model import (
     LAYERS,
     CapError,
@@ -181,6 +181,9 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
         return
     if capabilities.is_capability(obj) and not attrs:
         emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if modes.is_mode_element(obj) and not attrs:
+        emit(modes.show(ctx.model, uuid))
         return
     if data.is_data_element(obj) and not attrs:
         emit(data.show(ctx.model, uuid))
@@ -753,6 +756,79 @@ def data_exchange_item_add_element(model, exchange_item, name, type_, min_, max_
 def data_assign(model, exchange_item, elements, remove):
     """Make functional exchanges, function ports or component exchanges carry EXCHANGE_ITEM."""
     return data.assign(model, exchange_item, list(elements), remove)
+
+
+@cli.group("mode")
+def mode_group() -> None:
+    """Modes and states: state machines, states/modes, transitions, availability."""
+
+
+@mode_group.command("list")
+@click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
+@click.pass_obj
+@handled
+def mode_list(ctx: Ctx, layer_name: str) -> None:
+    """List the state machines of a layer with their owner."""
+    emit(modes.list_machines(ctx.model, layer_name))
+
+
+@mode_group.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def mode_show(ctx: Ctx, uuid: str) -> None:
+    """Show a state machine (tree of regions, states, transitions) or a state."""
+    emit(modes.show(ctx.model, uuid))
+
+
+@mode_group.group("machine")
+def mode_machine() -> None:
+    """State machines."""
+
+
+@mode_machine.command("create")
+@click.argument("owner")
+@click.option("--name", help='Default: "<owner> State Machine".')
+@write_command
+def mode_machine_create(model, owner, name):
+    """Create a state machine (with its Default Region) on a component, actor or entity."""
+    return modes.create_machine(model, owner, name)
+
+
+@mode_group.command("add")
+@click.argument("parent")
+@click.option("--name", required=True)
+@click.option("--kind", type=click.Choice(list(modes.KINDS), case_sensitive=False), default="state", show_default=True)
+@click.option("--description")
+@write_command
+def mode_add(model, parent, name, kind, description):
+    """Add a state, mode or pseudo-state to a state machine, region or state (sub-state)."""
+    return modes.add_state(model, parent, name, kind, description)
+
+
+@mode_group.command("transition")
+@click.argument("source")
+@click.argument("target")
+@click.option("--trigger", "triggers", multiple=True, help="Functional/component exchange or exchange item (repeatable).")
+@click.option("--effect", "effects", multiple=True, help="Function run on the transition (repeatable).")
+@click.option("--trigger-description", help="Free-text trigger.")
+@click.option("--guard", help="Guard condition text.")
+@click.option("--name")
+@write_command
+def mode_transition(model, source, target, triggers, effects, trigger_description, guard, name):
+    """Add a transition between two states/modes of the same state machine."""
+    return modes.add_transition(model, source, target, list(triggers), list(effects),
+                                trigger_description, guard, name)
+
+
+@mode_group.command("available")
+@click.argument("state")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def mode_available(model, state, elements, remove):
+    """Declare functions, chains or capabilities available in STATE (a state or mode)."""
+    return modes.set_available(model, state, list(elements), remove)
 
 
 @cli.group("status")

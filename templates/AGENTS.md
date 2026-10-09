@@ -41,9 +41,12 @@ text edit silently breaks them.
 8. After changing a capability, run `capcli capability show <cap>` and look
    at its `issues`. Every SA/LA/PA capability should realize one in the layer
    above, and involve the components that its functions are allocated to.
-9. New elements do not appear on existing diagrams. Tell the user which
+9. A region holds either **modes** or **states**, never both, and each
+   sub-region gets at most one initial state. capcli enforces this. Check
+   `capcli mode show <machine>` for `issues` after editing a state machine.
+10. New elements do not appear on existing diagrams. Tell the user which
    diagrams need updating in Capella, because capcli can't lay them out.
-10. If capcli cannot do something, say so and propose a reviewed Python script
+11. If capcli cannot do something, say so and propose a reviewed Python script
     using `capellambse`. Don't work around it with raw XML edits.
 
 ## Naming conventions (ADJUST)
@@ -124,6 +127,15 @@ capcli data exchange-item add-element <exchange-item> --name pos --type <type> [
 capcli data assign <exchange-item> <functional-exchange|function-port|component-exchange>... [--remove]
 capcli data show <uuid>                       # properties, literals, elements, usage, issues
 
+# Modes and states
+capcli mode list sa                           # state machines of a layer, with owner
+capcli mode machine create sa:root-component  # "<owner> State Machine" + Default Region
+capcli mode add <machine|region|state> --name Off [--kind state|mode|initial|final|choice|…]
+capcli mode transition <source> <target> [--trigger <exchange|item>] [--effect <function>] \
+    [--guard "power > 10"] [--trigger-description "power on"]
+capcli mode available <state> <function|chain|capability>... [--remove]
+capcli mode show <machine|state>              # tree, transitions, availability, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -173,5 +185,8 @@ Ops: `create-function`, `create-component`, `create-function-exchange`,
 or `"parent"`, plus `"literals"` / `"mechanism"`), `add-property` (`"class"`,
 `"name"`, `"type"`, `"min"`, `"max"`, `"kind"`), `add-literals` (`"enumeration"`,
 `"literals"`), `add-exchange-item-element` (`"exchange_item"`, `"name"`, `"type"`,
-`"min"`, `"max"`), `assign-exchange-item` (`"exchange_item"`, `"elements"`, `"remove"`).
+`"min"`, `"max"`), `assign-exchange-item` (`"exchange_item"`, `"elements"`, `"remove"`),
+`create-state-machine` (`"owner"`, `"name"`), `add-state` (`"parent"`, `"name"`,
+`"kind"`), `add-transition` (`"source"`, `"target"`, `"triggers"`, `"effects"`,
+`"guard"`, `"trigger_description"`), `set-available` (`"state"`, `"elements"`, `"remove"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.

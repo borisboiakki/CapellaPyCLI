@@ -16,6 +16,7 @@ from lxml import etree
 from . import capabilities as _capabilities
 from . import chains as _chains
 from . import data as _data
+from . import modes as _modes
 from . import status as _status
 from .model import (
     COMPONENT_TYPE,
@@ -380,14 +381,21 @@ def set_attrs(model, element: str, values: dict[str, str]):
 # and can therefore be removed together with it (``delete --cascade``).
 _CASCADABLE = re.compile(
     r"(Exchange|CommunicationMean|Allocation|Realization|Involvement\w*|"
-    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation)$"
+    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition)$"
 )
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
 # List-valued references that only say "this exchange/port carries that item".
 # Deleting the item must detach it from them, never delete the carrier.
 _DETACHABLE_ATTRS = {
     "exchangedItems", "convoyedInformations", "incomingExchangeItems", "outgoingExchangeItems",
+    "availableInStates",
+    # A transition's effects (functions) and triggers (exchanges, items):
+    # deleting one of those must not delete the transition.
+    "effect", "triggers",
 }
+# Caches Capella keeps on regions and states (see modes.py): always updated,
+# never a reason to refuse a delete.
+_ALWAYS_DETACH_ATTRS = {"involvedStates", "referencedStates"}
 _REF_TOKEN = re.compile(r"#([A-Za-z0-9_-]+)$")
 _NON_REF_ATTRS = {"id", "name", "description", "summary", "review", "sid"}
 
@@ -465,6 +473,8 @@ def delete(model, element: str, cascade: bool = False):
                 continue
             owner = _owning_element(el)
             info = {"uuid": owner.get("id"), "type": _xtype(owner), "name": owner.get("name"), "via": attr}
+            if attr in _ALWAYS_DETACH_ATTRS:
+                continue  # detached below
             if attr in _DETACHABLE_ATTRS:
                 if not cascade:
                     blockers.append(info)
@@ -497,7 +507,7 @@ def delete(model, element: str, cascade: bool = False):
     ids = doomed_ids()
     detached = []
     for el, attr, ref in list(iter_refs(model)):
-        if attr in _DETACHABLE_ATTRS and ref in ids and not inside_doomed(el):
+        if attr in _DETACHABLE_ATTRS | _ALWAYS_DETACH_ATTRS and ref in ids and not inside_doomed(el):
             tokens = [t for t in el.get(attr).split() if t.rpartition("#")[2] != ref]
             if tokens:
                 el.set(attr, " ".join(tokens))
@@ -589,12 +599,17 @@ def check(model, fix: bool = False) -> dict[str, Any]:
                 else:
                     incomplete.append({"uuid": el.get("id"), "type": _xtype(el), "missing": "sourceElement"})
     structure = structure_violations(model)
+    caches = _modes.cache_mismatches(model, fix=fix)
+    if fix:
+        fixed += len(caches)
+        caches = []
     res: dict[str, Any] = {
-        "ok": not dangling and not empty and not incomplete and not structure,
+        "ok": not dangling and not empty and not incomplete and not structure and not caches,
         "dangling": dangling,
         "empty": empty,
         "incomplete": incomplete,
         "structure": structure,
+        "state_caches": caches,
     }
     if fix:
         res["fixed"] = fixed
@@ -669,3 +684,4 @@ OPS.update(_chains.OPS)
 OPS.update(_capabilities.OPS)
 OPS.update(_status.OPS)
 OPS.update(_data.OPS)
+OPS.update(_modes.OPS)
