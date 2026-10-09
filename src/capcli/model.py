@@ -221,7 +221,9 @@ def detail(obj, attrs: list[str] | None = None) -> dict[str, Any]:
             if type_name(obj) in FUNCTION_TYPE.values():
                 d["allocated_to"] = to_json(v)
             continue
-        d[attr] = to_json(v)
+        # Don't let an attribute such as ExchangeItem.type clobber the
+        # metaclass/identity keys from brief().
+        d[f"attr_{attr}" if attr in ("uuid", "type", "layer") else attr] = to_json(v)
     if attrs is None and hasattr(obj, "inputs") and hasattr(obj, "outputs"):
         d["incoming_exchanges"] = [_exchange(x) for p in obj.inputs for x in p.exchanges]
         d["outgoing_exchanges"] = [_exchange(x) for p in obj.outputs for x in p.exchanges]
