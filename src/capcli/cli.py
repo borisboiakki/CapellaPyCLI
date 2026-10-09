@@ -206,9 +206,18 @@ def search(ctx: Ctx, text: str, types: tuple[str, ...], layer_name: str | None, 
     t = text.lower()
     hits = []
     for el in pool:
+        # Requirements keep their name in ReqIFLongName rather than `name`,
+        # so fall back to capellambse's accessor; unnamed elements must still
+        # show up in a pure --type search.
         name = el._element.get("name")
-        if not isinstance(name, str):
-            continue
+        if name is None:
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    name = getattr(el, "name", "")
+            except Exception:  # noqa: BLE001
+                name = ""
+        name = name if isinstance(name, str) else ""
         if text and not (name == text if exact else t in name.lower()):
             continue
         if not types and type_name(el).endswith(_NOISE_TYPES):
