@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, modes, ops, status
+from . import __version__, capabilities, chains, data, modes, ops, physical, status
 from .model import (
     LAYERS,
     CapError,
@@ -181,6 +181,9 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
         return
     if capabilities.is_capability(obj) and not attrs:
         emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if physical.is_physical_element(obj) and not attrs:
+        emit(physical.show(ctx.model, uuid))
         return
     if modes.is_mode_element(obj) and not attrs:
         emit(modes.show(ctx.model, uuid))
@@ -829,6 +832,68 @@ def mode_transition(model, source, target, triggers, effects, trigger_descriptio
 def mode_available(model, state, elements, remove):
     """Declare functions, chains or capabilities available in STATE (a state or mode)."""
     return modes.set_available(model, state, list(elements), remove)
+
+
+@cli.group("pa")
+def pa_group() -> None:
+    """Physical architecture: physical ports, links, paths and deployment."""
+
+
+@pa_group.command("list")
+@click.argument("what", type=click.Choice(["nodes", "behaviors", "links", "paths"]))
+@click.pass_obj
+@handled
+def pa_list(ctx: Ctx, what: str) -> None:
+    """List node or behaviour components (with their host), links or paths."""
+    emit(physical.list_physical(ctx.model, what))
+
+
+@pa_group.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def pa_show(ctx: Ctx, uuid: str) -> None:
+    """Show a physical component, port, link or path with deployment and issues."""
+    emit(physical.show(ctx.model, uuid))
+
+
+@pa_group.command("port")
+@click.argument("component")
+@click.option("--name", required=True)
+@write_command
+def pa_port(model, component, name):
+    """Add a physical port to a node component."""
+    return physical.create_port(model, component, name)
+
+
+@pa_group.command("link")
+@click.option("--source", required=True, help="Node component or physical port.")
+@click.option("--target", required=True, help="Node component or physical port.")
+@click.option("--name", required=True)
+@write_command
+def pa_link(model, source, target, name):
+    """Link two nodes; physical ports are created when components are given."""
+    return physical.create_link(model, source, target, name)
+
+
+@pa_group.command("path")
+@click.option("--name", required=True)
+@click.option("--link", "links", multiple=True, required=True, help="Physical link UUIDs in order (repeat).")
+@click.option("--parent", help="Physical component owning the path (default: the physical system).")
+@write_command
+def pa_path(model, name, links, parent):
+    """Create a physical path through consecutive links (nodes are derived)."""
+    return physical.create_path(model, name, list(links), parent)
+
+
+@pa_group.command("deploy")
+@click.argument("element")
+@click.argument("host")
+@click.option("--remove", is_flag=True)
+@write_command
+def pa_deploy(model, element, host, remove):
+    """Deploy ELEMENT (a behaviour or node component) on HOST."""
+    return physical.deploy(model, element, host, remove)
 
 
 @cli.group("status")

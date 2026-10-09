@@ -27,7 +27,7 @@ matches what Capella itself writes.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest -q                       # ~1.5 min, all tests must pass
+.venv/bin/pytest -q                       # ~2 min, all tests must pass
 .venv/bin/pip install pyflakes && .venv/bin/python -m pyflakes src tests  # no linter config; keep it clean
 .venv/bin/capcli -m tests/data/model info # try it on the test model
 ```
@@ -51,6 +51,7 @@ src/capcli/
   status.py        progress status (ProgressStatus values)
   data.py          data model: classes, properties, enumerations, exchange items
   modes.py         modes and states: state machines, regions, states, transitions
+  physical.py      physical architecture: ports, links, paths, deployment
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -62,6 +63,7 @@ tests/
   test_status.py        progress status
   test_data.py          data model
   test_modes.py         modes and states
+  test_physical.py      physical architecture
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -77,12 +79,14 @@ capabilities.py   ← imports model
 status.py         ← imports model
 data.py           ← imports model
 modes.py          ← imports model
+physical.py       ← imports model
 ops.py            ← imports model and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
 `model.py` depends on nothing in the package. The feature modules
-(`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`) import only
+(`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`,
+`physical.py`) import only
 from `model.py`. Helpers they share, such as `status_name` / `with_status` and
 `add_xml_child` / `datavalue_alias` (creating elements capellambse can't),
 live in `model.py`. `ops.py` imports both and
@@ -163,7 +167,9 @@ lxml tree directly (`obj._element`, `model._loader`):
   `triggers`) are *detached* under `--cascade`: the ID is removed from the
   list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state caches
   `involvedStates` / `referencedStates`) are updated even without
-  `--cascade`. Any other referrer blocks the delete. Diagram references are
+  `--cascade`. A `PhysicalPathInvolvement` referrer means a link or node
+  inside a physical path: with `--cascade` the whole path is deleted (a path
+  missing a hop is meaningless), otherwise the path blocks the delete. Any other referrer blocks the delete. Diagram references are
   only reported as a warning.
 - Removing an element: `model._loader.idcache_remove(el)` and then
   `el.getparent().remove(el)`. Always do both.
@@ -200,6 +206,9 @@ Check these again when upgrading capellambse.
 | Regions don't get `involvedStates`, states don't get `referencedStates` or their own sub-region "region" (Capella always has all three) | `modes.sync_caches()` after every state change; `add_state` creates the region; `check --fix` rebuilds caches |
 | A new `Constraint` has no `ownedSpecification`, and `specification[...] = …` raises (it is `None`) | `modes._set_guard` writes the `OpaqueExpression` (`bodies` + `languages`) with `model.add_xml_child` |
 | `StateTransition.effects` is deprecated; the accessor is `effect` (a list) | Use `effect` |
+| Deployment: capellambse also offers `InstanceDeploymentLink`, but Capella uses `PartDeploymentLink`, owned by the host's Part (`location` = host Part, `deployedElement` = deployed Part) | `physical.deploy` |
+| `PhysicalPath.involved_items.append()` writes involvements without the `nextInvolvements` chain that orders them | `physical.create_path` writes it; `_path_hops` reads the order from it |
+| `PhysicalComponent.deployed_components` is computed; deployment lives on Parts | Resolve the component's Part (`physical._part`) |
 | `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
@@ -214,19 +223,22 @@ Check these again when upgrading capellambse.
    (an LA property typed by SA's `Integer`), never from a layer below.
 3. **Modes vs states**: a region holds modes or states, never both, and at
    most one initial pseudo-state (`modes.add_state`).
-4. **Arcadia structure** (`ops._check_structure_rules`,
+4. **Physical architecture**: physical ports and links only on node
+   components; a node is never deployed on a behaviour component
+   (`physical.py`).
+5. **Arcadia structure** (`ops._check_structure_rules`,
    `ops.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
    - actors (SA/LA/PA) live in the Structure package, never inside a component;
    - `is_actor` can't be toggled with `set`.
-5. **Every realization has both ends** (`targetElement` and `sourceElement`).
-6. **delete never leaves a dangling reference.** `capcli check` must stay
+6. **Every realization has both ends** (`targetElement` and `sourceElement`).
+7. **delete never leaves a dangling reference.** `capcli check` must stay
    `ok` after every write in every test.
-7. **Ops never save.** Only `write_command`, `batch` and `check --fix` save,
+8. **Ops never save.** Only `write_command`, `batch` and `check --fix` save,
    and never after an error.
-8. **Errors say what to do instead**: the command, the shortcut, the
+9. **Errors say what to do instead**: the command, the shortcut, the
    allowed values.
-9. **JSON keys are an API.** Add keys, but don't rename or remove them.
+10. **JSON keys are an API.** Add keys, but don't rename or remove them.
 
 ## How to add a feature (checklist)
 
@@ -352,9 +364,8 @@ reload, `check` ok). Only capcli commands are missing. Roughly in order:
    generalization, exchange items on chain links.
 4. ~~Modes and states~~: done (`capcli mode`). Still missing: entry/exit/do
    activities, history and entry/exit pseudo-states, state realizations.
-5. **Physical architecture**: physical ports and links, deployment (an
-   `InstanceDeploymentLink` from the node's *Part* to the behaviour
-   component's *Part*), physical paths (untested).
+5. ~~Physical architecture~~: done (`capcli pa`). Still missing: physical
+   link categories, physical path realizations.
 6. **Scenarios** and **complex chains** (sequence nodes and links,
    exchange context, exchanged items). These are the hardest to get valid for
    Capella, because messages and nodes have ordering rules.
