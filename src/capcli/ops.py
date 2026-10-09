@@ -13,6 +13,7 @@ from typing import Any, Callable
 from capellambse import loader as _loader
 from lxml import etree
 
+from . import capabilities as _capabilities
 from . import chains as _chains
 from .model import (
     COMPONENT_TYPE,
@@ -77,6 +78,7 @@ def create_component(
 ):
     par = resolve(model, parent)
     key = _require_layer(par)
+    _check_structure_rules(key, par, actor)
     if key == "oa":
         attr = "entities"
     elif key == "pa" and hasattr(par, "owned_components"):
@@ -97,6 +99,54 @@ def create_component(
     if description:
         comp.description = description
     return {"created": brief(comp), "parent": brief(par)}
+
+
+def _check_structure_rules(key: str, parent, actor: bool) -> None:
+    """Enforce the Arcadia structure rules that capellambse does not.
+
+    - System Analysis treats the system as a black box: the System is its
+      only component, so no sub-systems (or second systems) can be created.
+    - Actors are external to the system: in SA, LA and PA they live in the
+      Structure package (or a sub-package), never inside a component.
+    """
+    if key == "oa":
+        return
+    in_component = _is_component(parent)
+    if actor and in_component:
+        raise CapError(
+            f"Actors are outside the system: create them in the Structure package "
+            f"(--parent {key}:structure or one of its sub-packages), not inside "
+            f"{type_name(parent)} {parent.name!r}"
+        )
+    if key == "sa" and not actor:
+        raise CapError(
+            "System Analysis treats the system as a black box: the System is the "
+            "only SA component. Decompose it in the Logical Architecture "
+            "(--parent la:root-component), or create an external system as an "
+            "actor (--actor --parent sa:structure)"
+        )
+
+
+def structure_violations(model) -> list[dict[str, Any]]:
+    """Existing elements that break the rules of ``_check_structure_rules``."""
+    out = []
+    for key in ("sa", "la", "pa"):
+        lay = getattr(model, key)
+        root = root_component(model, key)
+        for comp in lay.all_components:
+            parent = comp.parent
+            actor = bool(getattr(comp, "is_actor", False))
+            problem = None
+            if actor and _is_component(parent):
+                problem = f"actor inside {parent.name!r}; actors belong in the Structure package"
+            elif key == "sa" and not actor and comp != root:
+                problem = (
+                    "SA is a black box: the System must be the only SA component; "
+                    "model sub-systems as logical components in LA"
+                )
+            if problem:
+                out.append({**brief(comp), "layer": key, "problem": problem})
+    return out
 
 
 def create_function_exchange(model, source: str, target: str, name: str):
@@ -202,9 +252,12 @@ def realize(model, element: str, realized: str):
         attr = "realized_components"
     elif type_name(elem) in _CHAIN_TYPES and type_name(up) in _CHAIN_TYPES:
         attr = "realized_chains"
+    elif _capabilities.is_capability(elem) and _capabilities.is_capability(up):
+        attr = "realized_capabilities"
     else:
         raise CapError(
-            "realize links function->function, component->component or chain->chain"
+            "realize links function->function, component->component, "
+            "chain->chain or capability->capability"
         )
     order = ["oa", "sa", "la", "pa"]
     ke, ku = _require_layer(elem), _require_layer(up)
@@ -215,7 +268,52 @@ def realize(model, element: str, realized: str):
     if up in getattr(elem, attr):
         return {"unchanged": True, "reason": "already realized"}
     getattr(elem, attr).append(up)
+    _complete_trace_sources(elem)
     return {"element": brief(elem), "realizes": brief(up)}
+
+
+def _realization_links(elem, up):
+    """Realization links owned by ``elem`` that point at ``up``."""
+    return [
+        child
+        for child in elem._element
+        if isinstance(child.tag, str)
+        and _xtype(child).endswith("Realization")
+        and (child.get("targetElement") or "").endswith("#" + up.uuid)
+    ]
+
+
+def _complete_trace_sources(elem) -> int:
+    """Fill in ``sourceElement`` on realization links owned by ``elem``.
+
+    capellambse only writes ``targetElement``; Capella always writes both,
+    and the source of a realization is the element that owns it.
+    """
+    fixed = 0
+    for child in elem._element:
+        if (
+            isinstance(child.tag, str)
+            and _xtype(child).endswith("Realization")
+            and child.get("targetElement")
+            and child.get("sourceElement") is None
+        ):
+            child.set("sourceElement", "#" + elem.uuid)
+            fixed += 1
+    return fixed
+
+
+def unrealize(model, element: str, realized: str):
+    """Remove the realization link from ``element`` to ``realized``."""
+    elem, up = resolve(model, element), resolve(model, realized)
+    links = _realization_links(elem, up)
+    if not links:
+        raise CapError(f"{brief(elem)} does not realize {brief(up)}")
+    removed = []
+    for link in links:
+        removed.append({"uuid": link.get("id"), "type": _xtype(link)})
+        model._loader.idcache_remove(link)
+        elem._element.remove(link)
+    return {"element": brief(elem), "no_longer_realizes": brief(up), "removed": removed}
 
 
 # -------------------------------------------------------------------- update
@@ -229,6 +327,12 @@ def set_attrs(model, element: str, values: dict[str, str]):
     for key, raw in values.items():
         if key in ("uuid", "xtype", "parent"):
             raise CapError(f"{key!r} cannot be set")
+        if key == "is_actor" and _is_component(obj) and layer_key(obj) != "oa":
+            raise CapError(
+                "is_actor cannot be changed in place: actors and components live in "
+                "different places (Structure package vs. inside the system). Delete "
+                "and recreate the element with `create component [--actor]`"
+            )
         try:
             current = getattr(obj, key)
         except AttributeError:
@@ -269,7 +373,7 @@ def set_attrs(model, element: str, values: dict[str, str]):
 # and can therefore be removed together with it (``delete --cascade``).
 _CASCADABLE = re.compile(
     r"(Exchange|CommunicationMean|Allocation|Realization|Involvement\w*|"
-    r"Link|Part|Port|Trace|Generalization)$"
+    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation)$"
 )
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
 _REF_TOKEN = re.compile(r"#([A-Za-z0-9_-]+)$")
@@ -418,8 +522,12 @@ def _dedupe(items):
 _REQUIRED_REF_ATTRS = ("source", "target", "sourceElement", "targetElement", "abstractType")
 
 
-def check(model) -> dict[str, Any]:
-    """Look for dangling or empty references in the semantic model."""
+def check(model, fix: bool = False) -> dict[str, Any]:
+    """Look for dangling or empty references in the semantic model.
+
+    Also reports realization links without ``sourceElement`` (written by
+    capcli before 0.2 or by plain capellambse); ``fix`` fills them in.
+    """
     known = set()
     for t in model._loader.trees.values():
         for el in t.root.iter():
@@ -438,7 +546,32 @@ def check(model) -> dict[str, Any]:
             for attr in _REQUIRED_REF_ATTRS:
                 if el.get(attr) == "":
                     empty.append({"uuid": el.get("id"), "type": _xtype(el), "attr": attr})
-    return {"ok": not dangling and not empty, "dangling": dangling, "empty": empty}
+    incomplete, fixed = [], 0
+    for root in _semantic_roots(model):
+        for el in root.iter():
+            if (
+                isinstance(el.tag, str)
+                and _xtype(el).endswith("Realization")
+                and el.get("targetElement")
+                and el.get("sourceElement") is None
+            ):
+                owner = _owning_element(el.getparent())
+                if fix and owner is not None:
+                    el.set("sourceElement", "#" + owner.get("id"))
+                    fixed += 1
+                else:
+                    incomplete.append({"uuid": el.get("id"), "type": _xtype(el), "missing": "sourceElement"})
+    structure = structure_violations(model)
+    res: dict[str, Any] = {
+        "ok": not dangling and not empty and not incomplete and not structure,
+        "dangling": dangling,
+        "empty": empty,
+        "incomplete": incomplete,
+        "structure": structure,
+    }
+    if fix:
+        res["fixed"] = fixed
+    return res
 
 
 # --------------------------------------------------------------------- batch
@@ -451,6 +584,7 @@ OPS: dict[str, Callable[..., dict[str, Any]]] = {
     "allocate": allocate,
     "unallocate": unallocate,
     "realize": realize,
+    "unrealize": unrealize,
     "set": set_attrs,
     "delete": delete,
 }
@@ -485,7 +619,7 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kwargs = {k.replace("-", "_"): sub(v) for k, v in step.items()}
         if op == "unallocate" and "from" in kwargs:
             kwargs["from_"] = kwargs.pop("from")
-        if op == "create-chain" and "layer" in kwargs:
+        if op in ("create-chain", "create-capability") and "layer" in kwargs:
             kwargs["layer_name"] = kwargs.pop("layer")
         try:
             res = OPS[op](model, **kwargs)
@@ -502,3 +636,4 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return results
 
 OPS.update(_chains.OPS)
+OPS.update(_capabilities.OPS)

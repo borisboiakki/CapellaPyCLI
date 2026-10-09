@@ -108,11 +108,18 @@ def root_component(model, key: str):
     return lay.entity_pkg if key == "oa" else lay.root_component
 
 
+def structure_pkg(model, key: str):
+    """The layer's Structure package, where actors live (entities in OA)."""
+    lay = layer(model, key)
+    return lay.entity_pkg if key == "oa" else lay.component_pkg
+
+
 def resolve(model, ref: str):
     """Resolve an element reference.
 
     Accepts a UUID, or a shortcut ``<layer>:root-function`` /
-    ``<layer>:root-component`` (e.g. ``la:root-function``).
+    ``<layer>:root-component`` / ``<layer>:structure`` (e.g.
+    ``la:root-function``).
     """
     if ":" in ref:
         lay, _, what = ref.partition(":")
@@ -120,6 +127,8 @@ def resolve(model, ref: str):
             return root_function(model, lay)
         if what in ("root-component", "root-entity"):
             return root_component(model, lay)
+        if what == "structure":
+            return structure_pkg(model, lay)
         raise CapError(f"Unknown shortcut {ref!r}")
     if not UUID_RE.match(ref):
         raise CapError(f"Not a UUID: {ref!r} (use `capcli search` to find one)")
@@ -265,7 +274,8 @@ def same_layer(a, b) -> str:
     if ka != kb:
         raise CapError(
             f"{brief(a)} is in {ka} but {brief(b)} is in {kb}; "
-            "exchanges and allocations must stay within one layer "
+            "links between elements (exchanges, allocations, involvements, "
+            "relations) must stay within one layer "
             "(use `realize` for cross-layer traceability)"
         )
     return ka

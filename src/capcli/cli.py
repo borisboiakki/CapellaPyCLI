@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, chains, ops
+from . import __version__, capabilities, chains, ops
 from .model import (
     LAYERS,
     CapError,
@@ -179,6 +179,12 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
     if chains.is_chain(obj) and not attrs:
         emit(chains.show_chain(ctx.model, uuid))
         return
+    if capabilities.is_capability(obj) and not attrs:
+        emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if type_name(obj) == "Mission" and not attrs:
+        emit(capabilities.show_mission(ctx.model, uuid))
+        return
     emit(detail(obj, list(attrs) or None))
 
 
@@ -294,9 +300,12 @@ def validate(ctx: Ctx, layer_name: str | None, show_all: bool, limit: int) -> No
 @cli.command()
 @click.pass_obj
 @handled
-def check(ctx: Ctx) -> None:
-    """Check the model for dangling or empty references (run after edits)."""
-    res = ops.check(ctx.model)
+@click.option("--fix", is_flag=True, help="Fill in missing sourceElement on realization links and save.")
+def check(ctx: Ctx, fix: bool) -> None:
+    """Check the model for dangling, empty or incomplete references (run after edits)."""
+    res = ops.check(ctx.model, fix=fix)
+    if fix and res.get("fixed"):
+        res["saved"] = ctx.save()
     emit(res)
     if not res["ok"]:
         sys.exit(2)
@@ -419,9 +428,19 @@ def unallocate(model, element, from_):
 def realize(model, element, realized):
     """Trace ELEMENT as realizing REALIZED in the layer above.
 
-    Works for functions, components and functional chains (e.g. LA fn -> SA fn).
+    Works for functions, components, functional chains and capabilities
+    (e.g. LA fn -> SA fn, LA capability realization -> SA capability).
     """
     return ops.realize(model, element, realized)
+
+
+@cli.command()
+@click.argument("element")
+@click.argument("realized")
+@write_command
+def unrealize(model, element, realized):
+    """Remove the realization link from ELEMENT to REALIZED."""
+    return ops.unrealize(model, element, realized)
 
 
 @cli.command("set")
@@ -524,6 +543,130 @@ def chain_remove(model, chain_uuid, elements):
 def chain_involve(model, chain_uuid, capability):
     """Record that CAPABILITY involves the chain."""
     return chains.involve_chain(model, chain_uuid, capability)
+
+
+@cli.group()
+def capability() -> None:
+    """Capabilities (operational capabilities in OA, capability realizations in LA/PA)."""
+
+
+@capability.command("list")
+@click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
+@click.option("--involving", help="Only capabilities involving this element UUID.")
+@click.pass_obj
+@handled
+def capability_list(ctx: Ctx, layer_name: str, involving: str | None) -> None:
+    """List the capabilities of a layer with their number of issues."""
+    m = ctx.model
+    items = list(layer(m, layer_name).all_capabilities)
+    if involving:
+        uuid = resolve(m, involving).uuid
+        items = [
+            c for c in items
+            if any(x["uuid"] == uuid for group in capabilities.involved(c).values() for x in group)
+        ]
+    emit({
+        "count": len(items),
+        "items": [{**brief(c), "issues": len(capabilities.show_capability(m, c.uuid)["issues"])} for c in items],
+    })
+
+
+@capability.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def capability_show(ctx: Ctx, uuid: str) -> None:
+    """Show involvements, realizations, relations, missions and issues."""
+    emit(capabilities.show_capability(ctx.model, uuid))
+
+
+@capability.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS), help="Create in the layer's capability package.")
+@click.option("--parent", help="Capability package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def capability_create(model, name, layer_name, parent, description):
+    """Create a capability with the right metaclass for the layer."""
+    return capabilities.create_capability(model, name, layer_name, parent, description)
+
+
+@capability.command("involve")
+@click.argument("capability_uuid", metavar="CAPABILITY")
+@click.argument("elements", nargs=-1, required=True)
+@write_command
+def capability_involve(model, capability_uuid, elements):
+    """Involve components/actors (entities in OA), functions or chains."""
+    return capabilities.involve(model, capability_uuid, list(elements))
+
+
+@capability.command("uninvolve")
+@click.argument("capability_uuid", metavar="CAPABILITY")
+@click.argument("elements", nargs=-1, required=True)
+@write_command
+def capability_uninvolve(model, capability_uuid, elements):
+    """Remove involvements; the elements themselves are kept."""
+    return capabilities.uninvolve(model, capability_uuid, list(elements))
+
+
+def _relation_command(relation: str, verb: str):
+    @capability.command(relation, help=f"CAPABILITY {verb} OTHER (same layer). --remove deletes the link.")
+    @click.argument("capability_uuid", metavar="CAPABILITY")
+    @click.argument("other", metavar="OTHER")
+    @click.option("--remove", is_flag=True)
+    @write_command
+    def _cmd(model, capability_uuid, other, remove):
+        return capabilities.relate(model, relation, capability_uuid, other, remove)
+
+    return _cmd
+
+
+_relation_command("include", "includes")
+_relation_command("extend", "extends")
+_relation_command("generalize", "specializes (OTHER is the more general capability)")
+
+
+@cli.group()
+def mission() -> None:
+    """Missions (System Analysis) and the capabilities they exploit."""
+
+
+@mission.command("create")
+@click.option("--name", required=True)
+@click.option("--description")
+@write_command
+def mission_create(model, name, description):
+    """Create a mission in the System Analysis mission package."""
+    return capabilities.create_mission(model, name, description)
+
+
+@mission.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def mission_show(ctx: Ctx, uuid: str) -> None:
+    """Show the capabilities a mission exploits and the actors it involves."""
+    emit(capabilities.show_mission(ctx.model, uuid))
+
+
+@mission.command("exploit")
+@click.argument("mission_uuid", metavar="MISSION")
+@click.argument("capability_uuid", metavar="CAPABILITY")
+@click.option("--remove", is_flag=True)
+@write_command
+def mission_exploit(model, mission_uuid, capability_uuid, remove):
+    """Record that MISSION exploits an SA CAPABILITY."""
+    return capabilities.mission_exploit(model, mission_uuid, capability_uuid, remove)
+
+
+@mission.command("involve")
+@click.argument("mission_uuid", metavar="MISSION")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def mission_involve(model, mission_uuid, elements, remove):
+    """Involve SA actors (or the system) in MISSION."""
+    return capabilities.mission_involve(model, mission_uuid, list(elements), remove)
 
 
 @cli.command()

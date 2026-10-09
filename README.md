@@ -17,9 +17,11 @@ capcli handles them for you:
 | Removing an element leaves `target=""` / dangling references | `delete` refuses while the element is referenced. `--cascade` also removes exchanges, allocations, Parts and orphaned ports |
 | Functional/component exchanges need ports and the right owner | Ports are created and the exchange is placed in the common parent |
 | `PhysicalComponent.components` is a computed list | Uses `owned_components` |
+| capellambse accepts sub-systems in SA and actors inside the system, both against Arcadia | `create component` refuses them, and `check` reports existing ones under `structure` |
 | capellambse can't edit chains through `involved_*`, and `capability.involved_chains.append()` rejects chains | `chain` commands create the involvements directly and keep links and functions consistent |
+| Realizations written with only `targetElement` (Capella always writes `sourceElement` too) | `realize` writes both ends. `check` reports incomplete links and `check --fix` repairs them |
 | Partial writes after an error | `batch` applies a list of steps all-or-nothing |
-| Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules) |
+| Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules), plus an `issues` list in `chain show` and `capability show` |
 
 ## Install
 
@@ -73,6 +75,8 @@ read:    info · list · search · show · tree · diagrams list|render
 write:   create function|component|function-exchange|component-exchange
          allocate · unallocate · realize · set · delete · batch
 chains:  chain list|show|create|add|remove|involve
+capab.:  capability list|show|create|involve|uninvolve|include|extend|generalize
+         mission create|show|exploit|involve · realize · unrealize
 verify:  check · validate
 global:  --model PATH (or $CAPELLA_MODEL) · --dry-run
 ```
@@ -108,7 +112,8 @@ the kinds capcli can't create or modify.
 | Breakdown | `capcli tree <uuid> --depth N` | Functions with the component each is allocated to, or components with their sub-components |
 | Functional chains | `capcli chain list / show` | Ordered steps, entry and exit functions, and integrity issues |
 | Diagrams | `capcli diagrams list / render` | Lists diagrams (name, type, target) and renders one to SVG, as saved in the `.aird` |
-| Model health | `capcli check`, `capcli validate` | Broken or empty references, and capellambse's validation rules |
+| Capabilities and missions | `capcli capability list / show`, `capcli mission show` | Involved components, actors or entities, functions and chains; realizations up and down; include, extend and generalize relations in both directions; exploiting missions (SA); scenarios; and an `issues` list |
+| Model health | `capcli check`, `capcli validate` | Arcadia structure violations, broken, empty or incomplete references (`check --fix` repairs missing realization sources), and capellambse's validation rules |
 
 Kinds available in `capcli list <layer> <kind>`:
 
@@ -134,14 +139,17 @@ Kinds available in `capcli list <layer> <kind>`:
 | Element or relation | Create | Modify | Delete | Notes |
 |---|:-:|:-:|:-:|---|
 | Functions (activities in OA) | ✅ | ✅ | ✅ | All four layers. Created below a parent function, with the right metaclass for the layer |
-| Components (entities in OA), actors | ✅ | ✅ | ✅ | `--actor`. `--nature node\|behavior` in PA. The Part that Capella needs is created automatically |
+| Components (entities in OA), actors | ✅ | ✅ | ✅ | `--actor`. `--nature node\|behavior` in PA. The Part that Capella needs is created automatically. Arcadia rules are enforced: no components inside the SA System (it's a black box; decompose in LA), and actors only in the Structure package (`<layer>:structure`). `is_actor` can't be toggled with `set` |
 | Functional exchanges | ✅ | ✅ | ✅ | Ports are created automatically. In OA, activities are connected directly |
 | Component exchanges (communication means in OA) | ✅ | ✅ | ✅ | `--kind flow\|delegation\|assembly`. Component ports are created automatically |
 | Function → component allocation | ✅ | ✅ | ✅ | `allocate`, `unallocate`, `allocate --move` |
 | Functional exchange → component exchange allocation | ✅ | | ✅ | `allocate`, `unallocate` |
-| Realization (function, component or chain → the layer above) | ✅ | | 🟡 | `realize`. There is no `unrealize`: delete the realization link instead (`show <uuid> --attr function_realizations`, then `delete <link uuid>`) |
+| Realization (function, component, chain or capability → the layer above) | ✅ | | ✅ | `realize`, `unrealize`. Both ends of the link are written, as Capella does |
 | Functional chains / operational processes | ✅ | ✅ | ✅ | `chain create / add / remove`, with `--path` |
-| Chain involved in a capability | ✅ | | 🟡 | `chain involve`. To undo, delete the involvement (`show <capability> --attr chain_involvements`) |
+| Capabilities (OperationalCapability, Capability, CapabilityRealization) | ✅ | ✅ | ✅ | `capability create` picks the metaclass for the layer. Name and description with `set` |
+| Involvement in a capability: components, actors, entities, functions, chains | ✅ | | ✅ | `capability involve` / `uninvolve`. `chain involve` still works too |
+| Capability include / extend / generalize | ✅ | | ✅ | `capability include`, `extend` or `generalize`, each with `--remove` |
+| Missions (SA): exploited capabilities, involved actors | ✅ | | ✅ | `mission create`, `mission exploit`, `mission involve` (`--remove` to undo) |
 | Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
 | Existing requirement text | | ✅ | | `set <req> text="<p>…</p>"` |
 | Existing property values (PVMT) | | ✅ | | `set <property value> value=…` |
@@ -156,7 +164,7 @@ Changing them needs Capella, or a reviewed capellambse script.
 | Area | What is missing |
 |---|---|
 | Structure | Creating packages. Moving an element to another parent. Reordering elements |
-| Capabilities and missions | Creating capabilities, missions or capability exploitations. Involving functions, components or actors in a capability. Only chain involvement is supported |
+| Capabilities | Capability packages. Pre- and postconditions (see Constraints) |
 | Scenarios | Scenarios, instance roles, sequence messages, fragments |
 | Modes and states | State machines, regions, states, modes, transitions. "Available in states" on functions and chains |
 | Data model | Classes, properties, data types, enumerations, unions, collections, exchange items. Assigning exchange items to exchanges, ports or chain links. Existing items' simple attributes can still be changed with `set` |
