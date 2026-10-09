@@ -27,7 +27,7 @@ matches what Capella itself writes.
 
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
-.venv/bin/pytest -q                       # ~1 min, all tests must pass
+.venv/bin/pytest -q                       # ~1.5 min, all tests must pass
 .venv/bin/pip install pyflakes && .venv/bin/python -m pyflakes src tests  # no linter config; keep it clean
 .venv/bin/capcli -m tests/data/model info # try it on the test model
 ```
@@ -49,6 +49,7 @@ src/capcli/
   chains.py        functional chains / operational processes
   capabilities.py  capabilities (OA/SA/LA/PA) and missions (SA)
   status.py        progress status (ProgressStatus values)
+  data.py          data model: classes, properties, enumerations, exchange items
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -58,6 +59,7 @@ tests/
   test_capabilities.py  capabilities, missions, realization sources
   test_structure.py     Arcadia structure rules
   test_status.py        progress status
+  test_data.py          data model
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -71,12 +73,13 @@ model.py          ← imports only capellambse
 chains.py         ← imports model
 capabilities.py   ← imports model
 status.py         ← imports model
-ops.py            ← imports model, chains, capabilities, status (merges their OPS)
+data.py           ← imports model
+ops.py            ← imports model and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
 `model.py` depends on nothing in the package. The feature modules
-(`chains.py`, `capabilities.py`, `status.py`) import only from `model.py`.
+(`chains.py`, `capabilities.py`, `status.py`, `data.py`) import only from `model.py`.
 Helpers they share, such as `status_name` / `with_status`, live in `model.py`. `ops.py` imports both and
 merges their `OPS` dicts into its registry. Keep it that way: a feature
 module importing `ops` creates an import cycle (this happened once, and is
@@ -110,8 +113,9 @@ model and saves only if every step succeeds, so it is all-or-nothing.
 `"as": "x"` stores the UUID from a step's `result["created"]`, and `"$x"` in
 later steps (also inside lists and dicts) is replaced with it. Batch arguments
 are the op's keyword names, with `-` normalized to `_`. There are a few
-explicit aliases in `run_batch`: `from` → `from_`, and `layer` → `layer_name`
-for `create-chain` / `create-capability`.
+explicit aliases in `run_batch`: `from` → `from_`, `class` → `cls`
+(`add-property`), and `layer` → `layer_name` for the `create-*` ops that
+take a layer.
 
 A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
 
@@ -149,7 +153,9 @@ lxml tree directly (`obj._element`, `model._loader`):
   metaclass matches `_CASCADABLE` (exchanges, allocations, realizations,
   involvements, Parts, ports, include/extend/generalization/exploitation),
   repeated until nothing new is found. Ports left without exchanges are
-  removed too. Any other referrer blocks the delete. Diagram references are
+  removed too. References in `_DETACHABLE_ATTRS` (exchange items carried by
+  exchanges and ports) are *detached*: the ID is removed from the list and
+  the carrier is kept. Any other referrer blocks the delete. Diagram references are
   only reported as a warning.
 - Removing an element: `model._loader.idcache_remove(el)` and then
   `el.getparent().remove(el)`. Always do both.
@@ -178,6 +184,10 @@ Check these again when upgrading capellambse.
 | `InterfaceAllocation` is marked abstract, so interface allocation fails | Not supported yet (needs raw XML, or an upstream fix) |
 | `status` accepts *any* `EnumerationPropertyLiteral`, including PVMT values; `status = None` raises | `status.py` only accepts literals of the project's `ProgressStatus` type, and clears with `del obj.status` |
 | `progress_status` has no setter, but it is only the name of the `status` literal | Setting `status` sets it. `set progress_status=…` is treated as `status` |
+| Properties and exchange item elements get no `ownedMinCard`/`ownedMaxCard`, and `min_card = …` raises | `data._set_cards` writes `LiteralNumericValue` children at XML level (`loader.new_uuid` + `idcache_index` *inside* the `with`, or it raises KeyError) |
+| `EnumerationLiteral` misses `abstractType` (back-reference to its enumeration); `ExchangeItemElement` misses `direction="UNSET" composite="true"` | Set explicitly in `data.py` |
+| `DataPkg.enumerations` is a filter, but creating through it works; `ExchangeItemElement.abstract_type` is deprecated | Create enumerations with `data_types.create("Enumeration")`; use `type` |
+| Exchange items: functional exchanges use `exchanged_items`, function ports `exchange_items` (`incoming`/`outgoingExchangeItems` in XML), component exchanges `convoyed_informations` (`allocated_exchange_items` is deprecated); component ports carry interfaces, not items | `data.CARRIER_ATTR` |
 | `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
@@ -187,7 +197,9 @@ Check these again when upgrading capellambse.
 1. **Explicit metaclasses** on every create.
 2. **Same layer** for exchanges, allocations, involvements and relations
    (`model.same_layer`). Cross-layer links are only realizations, from a layer
-   to the one directly above (`oa ← sa ← la ← pa`).
+   to the one directly above (`oa ← sa ← la ← pa`). Data is the exception:
+   a type or exchange item may come from the same layer or any layer above
+   (an LA property typed by SA's `Integer`), never from a layer below.
 3. **Arcadia structure** (`ops._check_structure_rules`,
    `ops.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
@@ -316,14 +328,14 @@ capellambse can already write all of the following (each was probed: save,
 reload, `check` ok). Only capcli commands are missing. Roughly in order:
 
 1. ~~`status`~~: done (`capcli status`).
-2. **Requirements**: create in a `CapellaModule`, and link or unlink to
+2. **Requirements** (skipped for now, at the user's request): create in a `CapellaModule`, and link or unlink to
    elements. In a probe, `r.relations.create("CapellaOutgoingRelation", target=fn)`
    linked the requirement to the function (it appeared in `fn.requirements`),
    but capellambse wrote a `CapellaIncomingRelation`. Check the
    direction against Capella-written relations before relying on it.
-3. **Data model and exchange items**: classes, properties, enumerations,
-   exchange items and their elements. Assign them to functional exchanges and
-   ports (`exchanged_items`, `exchange_items`).
+3. ~~Data model and exchange items~~: done (`capcli data`). Still missing:
+   unions, collections, physical quantities, creating basic types, class
+   generalization, exchange items on chain links.
 4. **Modes and states**: state machines, regions, states and modes,
    transitions, and `available_in_states`.
 5. **Physical architecture**: physical ports and links, deployment (an

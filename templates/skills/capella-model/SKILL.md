@@ -1,6 +1,6 @@
 ---
 name: capella-model
-description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions and progress status in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
+description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status and the data model (classes, enumerations, exchange items) in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
 compatibility: Needs the capcli command on PATH (pip install from the CapellaPyCLI repo, Python 3.10+). Works with OpenCode and Claude Code.
 metadata:
   tool: capcli
@@ -133,6 +133,17 @@ capcli capability generalize <cap> <more-general-cap> [--remove]
 capcli realize <la-capability> <sa-capability>    # sa->oa, la->sa, pa->la
 capcli unrealize <element> <realized>         # works for every kind of realization
 
+# Data model (classes, enumerations, exchange items)
+capcli data types --layer la [--name int]     # types usable from LA (own + layers above)
+capcli data class create --layer la --name "Position"
+capcli data property add <class> --name lat --type <type> [--min 0] [--max '*'] [--kind composition]
+capcli data enum create --layer la --name NavMode --literal AUTO --literal MANUAL
+capcli data enum add-literal <enum> SAFE
+capcli data exchange-item create --layer la --name PositionMsg --mechanism flow
+capcli data exchange-item add-element <exchange-item> --name pos --type <type> [--min/--max]
+capcli data assign <exchange-item> <functional-exchange|function-port|component-exchange>... [--remove]
+capcli data show <uuid>                       # properties, literals, elements, usage, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -195,3 +206,10 @@ later steps. The ops and their arguments:
 | `mission-exploit` | `mission`, `capability`, `remove` |
 | `mission-involve` | `mission`, `elements`, `remove` |
 | `set-status` | `value`, `elements` |
+| `create-class` | `name`, `layer` or `parent`, `description` |
+| `add-property` | `class`, `name`, `type`, `min`, `max`, `kind`, `description` |
+| `create-enumeration` | `name`, `layer` or `parent`, `literals`, `description` |
+| `add-literals` | `enumeration`, `literals` |
+| `create-exchange-item` | `name`, `layer` or `parent`, `mechanism`, `description` |
+| `add-exchange-item-element` | `exchange_item`, `name`, `type`, `min`, `max` |
+| `assign-exchange-item` | `exchange_item`, `elements`, `remove` |

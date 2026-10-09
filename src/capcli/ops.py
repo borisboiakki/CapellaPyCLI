@@ -15,6 +15,7 @@ from lxml import etree
 
 from . import capabilities as _capabilities
 from . import chains as _chains
+from . import data as _data
 from . import status as _status
 from .model import (
     COMPONENT_TYPE,
@@ -382,6 +383,11 @@ _CASCADABLE = re.compile(
     r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation)$"
 )
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
+# List-valued references that only say "this exchange/port carries that item".
+# Deleting the item must detach it from them, never delete the carrier.
+_DETACHABLE_ATTRS = {
+    "exchangedItems", "convoyedInformations", "incomingExchangeItems", "outgoingExchangeItems",
+}
 _REF_TOKEN = re.compile(r"#([A-Za-z0-9_-]+)$")
 _NON_REF_ATTRS = {"id", "name", "description", "summary", "review", "sid"}
 
@@ -459,6 +465,10 @@ def delete(model, element: str, cascade: bool = False):
                 continue
             owner = _owning_element(el)
             info = {"uuid": owner.get("id"), "type": _xtype(owner), "name": owner.get("name"), "via": attr}
+            if attr in _DETACHABLE_ATTRS:
+                if not cascade:
+                    blockers.append(info)
+                continue  # detached below
             if cascade and _CASCADABLE.search(info["type"]):
                 extra.append(owner)
             else:
@@ -485,6 +495,15 @@ def delete(model, element: str, cascade: bool = False):
     }
 
     ids = doomed_ids()
+    detached = []
+    for el, attr, ref in list(iter_refs(model)):
+        if attr in _DETACHABLE_ATTRS and ref in ids and not inside_doomed(el):
+            tokens = [t for t in el.get(attr).split() if t.rpartition("#")[2] != ref]
+            if tokens:
+                el.set(attr, " ".join(tokens))
+            else:
+                del el.attrib[attr]
+            detached.append({"from": el.get("id"), "type": _xtype(el), "attr": attr, "item": ref})
     diagram_refs = {ref for _, _, ref in iter_refs(model, visual=True) if ref in ids}
     removed = []
     for el in doomed:
@@ -506,6 +525,8 @@ def delete(model, element: str, cascade: bool = False):
             port.getparent().remove(port)
 
     result: dict[str, Any] = {"deleted": removed}
+    if detached:
+        result["detached"] = detached
     if diagram_refs:
         result["warning"] = (
             f"{len(diagram_refs)} deleted element(s) appear on diagrams; open the "
@@ -625,7 +646,10 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
         kwargs = {k.replace("-", "_"): sub(v) for k, v in step.items()}
         if op == "unallocate" and "from" in kwargs:
             kwargs["from_"] = kwargs.pop("from")
-        if op in ("create-chain", "create-capability") and "layer" in kwargs:
+        if op == "add-property" and "class" in kwargs:
+            kwargs["cls"] = kwargs.pop("class")  # `class` is a Python keyword
+        if op in ("create-chain", "create-capability", "create-class", "create-enumeration",
+                  "create-exchange-item") and "layer" in kwargs:
             kwargs["layer_name"] = kwargs.pop("layer")
         try:
             res = OPS[op](model, **kwargs)
@@ -644,3 +668,4 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
 OPS.update(_chains.OPS)
 OPS.update(_capabilities.OPS)
 OPS.update(_status.OPS)
+OPS.update(_data.OPS)
