@@ -17,6 +17,7 @@ from . import capabilities as _capabilities
 from . import chains as _chains
 from . import data as _data
 from . import modes as _modes
+from . import physical as _physical
 from . import status as _status
 from .model import (
     COMPONENT_TYPE,
@@ -207,9 +208,14 @@ def _allocation_slot(elem, target):
         return "allocated_functions", "function->component"
     if te == "FunctionalExchange" and tt in ("ComponentExchange", "CommunicationMean"):
         return "allocated_functional_exchanges", "functional exchange->component exchange"
+    if te == "ComponentExchange" and tt in ("PhysicalLink", "PhysicalPath"):
+        return "allocated_component_exchanges", "component exchange->" + ("physical link" if tt == "PhysicalLink" else "physical path")
+    if te == "ComponentPort" and tt == "PhysicalPort":
+        return "allocated_component_ports", "component port->physical port"
     raise CapError(
         f"Don't know how to allocate {te} to {tt}; supported: function->component, "
-        "functional exchange->component exchange"
+        "functional exchange->component exchange, component exchange->physical link/path, "
+        "component port->physical port"
     )
 
 
@@ -475,6 +481,14 @@ def delete(model, element: str, cascade: bool = False):
             info = {"uuid": owner.get("id"), "type": _xtype(owner), "name": owner.get("name"), "via": attr}
             if attr in _ALWAYS_DETACH_ATTRS:
                 continue  # detached below
+            if info["type"] == "PhysicalPathInvolvement":
+                # A path missing a hop is meaningless: cascade to the whole path.
+                if cascade:
+                    extra.append(owner.getparent())
+                else:
+                    path = owner.getparent()
+                    blockers.append({"uuid": path.get("id"), "type": _xtype(path), "name": path.get("name"), "via": "involvement"})
+                continue
             if attr in _DETACHABLE_ATTRS:
                 if not cascade:
                     blockers.append(info)
@@ -685,3 +699,4 @@ OPS.update(_capabilities.OPS)
 OPS.update(_status.OPS)
 OPS.update(_data.OPS)
 OPS.update(_modes.OPS)
+OPS.update(_physical.OPS)

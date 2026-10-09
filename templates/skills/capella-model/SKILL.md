@@ -1,6 +1,6 @@
 ---
 name: capella-model
-description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status, the data model (classes, enumerations, exchange items) and modes and states in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
+description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status, the data model (classes, enumerations, exchange items) and modes and states, and the physical architecture (links, paths, deployment) in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
 compatibility: Needs the capcli command on PATH (pip install from the CapellaPyCLI repo, Python 3.10+). Works with OpenCode and Claude Code.
 metadata:
   tool: capcli
@@ -59,6 +59,9 @@ the model:
    - run `capcli validate --layer <layer>`;
    - for every chain you touched, `capcli chain show <chain>` must have an empty
      `issues` list, unless the user asked for a partial chain;
+   - for every physical link or path you allocated exchanges to, check
+     `capcli pa show <link|path>` (its components must be deployed on the
+     nodes at its ends);
    - for every state machine you touched, check `capcli mode show <machine>`
      (a region holds modes or states, never both);
    - for every capability you touched, check `capcli capability show <cap>`.
@@ -155,6 +158,16 @@ capcli mode transition <source> <target> [--trigger <exchange|item>] [--effect <
 capcli mode available <state> <function|chain|capability>... [--remove]
 capcli mode show <machine|state>              # tree, transitions, availability, issues
 
+# Physical architecture (PA)
+capcli pa list nodes|behaviors|links|paths    # behaviors include the node they run on
+capcli pa port <node> --name eth0             # physical ports only on node components
+capcli pa link --source <node|port> --target <node|port> --name CAN-A   # ports auto-created
+capcli pa deploy <behaviour-or-node> <host> [--remove]   # never a node on a behaviour component
+capcli pa path --name cam-to-ecu --link <link1> --link <link2>   # consecutive links
+capcli allocate <component-exchange> <physical-link|physical-path>
+capcli allocate <component-port> <physical-port>
+capcli pa show <component|port|link|path>     # deployment, hops, allocations, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -228,3 +241,7 @@ later steps. The ops and their arguments:
 | `add-state` | `parent`, `name`, `kind`, `description` |
 | `add-transition` | `source`, `target`, `triggers`, `effects`, `trigger_description`, `guard`, `name` |
 | `set-available` | `state`, `elements`, `remove` |
+| `create-physical-port` | `component`, `name` |
+| `create-physical-link` | `source`, `target`, `name` |
+| `create-physical-path` | `name`, `links`, `parent` |
+| `deploy` | `element`, `host`, `remove` |

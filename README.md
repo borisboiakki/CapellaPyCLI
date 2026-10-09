@@ -24,6 +24,7 @@ capcli handles them for you:
 | Data elements are written without multiplicities, literal back-references or Capella's default element flags, and multiplicities can't be created through the API | `data` commands write them the way Capella does |
 | Deleting an exchange item would cascade to every exchange that carries it | `delete --cascade` *detaches* the item from exchanges and ports and keeps them |
 | State machines miss Capella's caches (`involvedStates`, `referencedStates`) and per-state regions; guards are created without their text | `mode` commands maintain them, and `check --fix` rebuilds stale caches |
+| capellambse offers an `InstanceDeploymentLink` for deployment and writes physical paths without their hop order (`nextInvolvements`) | `pa deploy` writes Capella's `PartDeploymentLink`; `pa path` writes the hop chain |
 | Partial writes after an error | `batch` applies a list of steps all-or-nothing |
 | Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules), plus an `issues` list in `chain show` and `capability show` |
 
@@ -82,6 +83,7 @@ chains:  chain list|show|create|add|remove|involve
 capab.:  capability list|show|create|involve|uninvolve|include|extend|generalize
          mission create|show|exploit|involve · realize · unrealize
 status:  status values|set|list
+pa:      pa list|show · pa port · pa link · pa path · pa deploy
 modes:   mode list|show · mode machine create · mode add · mode transition · mode available
 data:    data types|show · data class create · data property add · data enum create|add-literal
          data exchange-item create|add-element · data assign
@@ -121,6 +123,7 @@ the kinds capcli can't create or modify.
 | Functional chains | `capcli chain list / show` | Ordered steps, entry and exit functions, and integrity issues |
 | Diagrams | `capcli diagrams list / render` | Lists diagrams (name, type, target) and renders one to SVG, as saved in the `.aird` |
 | Capabilities and missions | `capcli capability list / show`, `capcli mission show` | Involved components, actors or entities, functions and chains; realizations up and down; include, extend and generalize relations in both directions; exploiting missions (SA); scenarios; and an `issues` list |
+| Physical architecture | `capcli pa list nodes/behaviors/links/paths`, `capcli pa show`, and `show` | Node and behaviour components with where they are deployed; physical ports and their links; links with their end nodes and allocated component exchanges; paths as ordered hops; an `issues` list (exchanges allocated to a link or path whose components aren't deployed at its ends, undeployed behaviour components, unconnected ports) |
 | Modes and states | `capcli mode list L`, `capcli mode show`, and `show` | State machines with their owner; the tree of regions, states/modes and pseudo-states; transitions with triggers, effects, guard and trigger description; what is available in each state; an `issues` list |
 | Data model | `capcli data types --layer L`, `capcli data show`, and `show` | Types usable from a layer (its own and those of the layers above, including SA's predefined types); classes with typed properties and multiplicities; enumeration literals; exchange items with their elements and the exchanges/ports that carry them; where each type is used; an `issues` list |
 | Progress status | `capcli status values / list`, and `show` | The project's status values, elements grouped by status, and each element's status in `show` |
@@ -162,6 +165,10 @@ Kinds available in `capcli list <layer> <kind>`:
 | Capability include / extend / generalize | ✅ | | ✅ | `capability include`, `extend` or `generalize`, each with `--remove` |
 | Missions (SA): exploited capabilities, involved actors | ✅ | | ✅ | `mission create`, `mission exploit`, `mission involve` (`--remove` to undo) |
 | Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
+| Physical ports and links (PA) | ✅ | ✅ | ✅ | `pa port`, `pa link` (ports created automatically). Only between node components |
+| Deployment of behaviour (or node) components on nodes | ✅ | | ✅ | `pa deploy` / `pa deploy --remove`. A node is never deployed on a behaviour component |
+| Physical paths | ✅ | | ✅ | `pa path --link … --link …` from consecutive links. Deleting a link with `--cascade` also deletes the paths through it |
+| Component exchange → physical link/path; component port → physical port | ✅ | | ✅ | `allocate` / `unallocate` |
 | State machines, states, modes and pseudo-states (initial, final, terminate, choice, fork, join), sub-states | ✅ | ✅ | ✅ | `mode machine create`, `mode add`. A region never mixes modes and states, and holds one initial state at most |
 | Transitions (triggers, effects, guard, trigger description) | ✅ | | ✅ | `mode transition`. Deleting a state deletes its transitions (with `--cascade`); deleting an effect function or trigger only detaches it |
 | Functions, chains and capabilities available in a state or mode | ✅ | | ✅ | `mode available <state> <element>... [--remove]` |
@@ -188,7 +195,7 @@ Changing them needs Capella, or a reviewed capellambse script.
 | Modes and states | Entry, exit and do-activities of states. History, entry-point and exit-point pseudo-states. Moving a state to another region. State and transition realizations across layers |
 | Data model | Unions, collections, physical quantities and new numeric/string/boolean types. Class generalization (super-classes). Exchange items on chain links. Use the existing types, or create them in Capella |
 | Interfaces and ports | Interfaces, interface allocation and implementation. Creating or allocating ports on their own: ports only come into being with an exchange |
-| Physical architecture | Physical links, physical paths, physical ports, deploying behaviour components on node components |
+| Physical architecture | Physical link categories, physical path realizations, and moving a component to another node part |
 | Functional chains | Control nodes and sequence links of complex chains (AND/OR/ITERATE). They are kept but not editable, and `chain show` leaves them out. Exchange contexts and exchanged items on chain links |
 | Requirements | Creating requirements, or linking them to model elements. Existing text and attributes can be changed with `set` |
 | Property values (PVMT) | Creating property values or groups, or applying them to elements. Existing values can be changed with `set` |

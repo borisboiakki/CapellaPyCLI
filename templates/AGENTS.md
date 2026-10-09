@@ -44,9 +44,13 @@ text edit silently breaks them.
 9. A region holds either **modes** or **states**, never both, and each
    sub-region gets at most one initial state. capcli enforces this. Check
    `capcli mode show <machine>` for `issues` after editing a state machine.
-10. New elements do not appear on existing diagrams. Tell the user which
+10. In PA, physical ports and links connect **node** components; behaviour
+    components are **deployed** on nodes (`capcli pa deploy`). A component
+    exchange allocated to a link or path must run between components deployed
+    on the nodes at its ends: check `capcli pa show <link|path>` for `issues`.
+11. New elements do not appear on existing diagrams. Tell the user which
    diagrams need updating in Capella, because capcli can't lay them out.
-11. If capcli cannot do something, say so and propose a reviewed Python script
+12. If capcli cannot do something, say so and propose a reviewed Python script
     using `capellambse`. Don't work around it with raw XML edits.
 
 ## Naming conventions (ADJUST)
@@ -136,6 +140,16 @@ capcli mode transition <source> <target> [--trigger <exchange|item>] [--effect <
 capcli mode available <state> <function|chain|capability>... [--remove]
 capcli mode show <machine|state>              # tree, transitions, availability, issues
 
+# Physical architecture (PA)
+capcli pa list nodes|behaviors|links|paths    # behaviors include the node they run on
+capcli pa port <node> --name eth0             # physical ports only on node components
+capcli pa link --source <node|port> --target <node|port> --name CAN-A   # ports auto-created
+capcli pa deploy <behaviour-or-node> <host> [--remove]   # never a node on a behaviour component
+capcli pa path --name cam-to-ecu --link <link1> --link <link2>   # consecutive links
+capcli allocate <component-exchange> <physical-link|physical-path>
+capcli allocate <component-port> <physical-port>
+capcli pa show <component|port|link|path>     # deployment, hops, allocations, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -188,5 +202,8 @@ or `"parent"`, plus `"literals"` / `"mechanism"`), `add-property` (`"class"`,
 `"min"`, `"max"`), `assign-exchange-item` (`"exchange_item"`, `"elements"`, `"remove"`),
 `create-state-machine` (`"owner"`, `"name"`), `add-state` (`"parent"`, `"name"`,
 `"kind"`), `add-transition` (`"source"`, `"target"`, `"triggers"`, `"effects"`,
-`"guard"`, `"trigger_description"`), `set-available` (`"state"`, `"elements"`, `"remove"`).
+`"guard"`, `"trigger_description"`), `set-available` (`"state"`, `"elements"`, `"remove"`),
+`create-physical-port` (`"component"`, `"name"`), `create-physical-link` (`"source"`,
+`"target"`, `"name"`), `create-physical-path` (`"name"`, `"links"`, `"parent"`), `deploy`
+(`"element"`, `"host"`, `"remove"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.
