@@ -92,9 +92,11 @@ def test_rules(run):
     ]:
         data, code = run(*args, ok=False)
         assert code == 1 and needle in data["error"], data
-    lone = run("pa", "link", "--source", ids["ecu"], "--target", ids["cam"], "--name", "direct")["created"]["uuid"]
-    data, code = run("pa", "path", "--name", "x", "--link", ids["l1"], "--link", lone, "--link", ids["l1"], ok=False)
+    twin = run("pa", "link", "--source", ids["cam"], "--target", ids["gw"], "--name", "CAN-A2")["created"]["uuid"]
+    data, code = run("pa", "path", "--name", "x", "--link", ids["l1"], "--link", ids["l2"], "--link", twin, ok=False)
     assert code == 1 and "consecutive" in data["error"]
+    data, code = run("pa", "path", "--name", "x", "--link", ids["l1"], "--link", ids["l1"], ok=False)
+    assert code == 1 and "appears twice" in data["error"]
     assert run("pa", "deploy", ids["nav"], ids["ecu"])["unchanged"]
 
 
@@ -140,3 +142,26 @@ def test_link_categories(run, model):
     assert [d["attr"] for d in res["detached"]] == ["links"]
     assert run("show", cat)["uuid"] == cat
     assert run("check")["ok"]
+
+
+def test_ring_and_parallel_paths(run, model):
+    ids = _build(run)
+    back = run("pa", "link", "--source", ids["ecu"], "--target", ids["cam"], "--name", "CAN-C")["created"]["uuid"]
+    ring = run("pa", "path", "--name", "ring", "--link", ids["l1"], "--link", ids["l2"], "--link", back)
+    shown = run("show", ring["created"]["uuid"])
+    assert [h["name"] for h in shown["hops"]] == ["Camera", "CAN-A", "Gateway", "CAN-B", "ECU", "CAN-C", "Camera"]
+    assert shown["issues"] == []
+    twin = run("pa", "link", "--source", ids["gw"], "--target", ids["cam"], "--name", "CAN-A2")["created"]["uuid"]
+    hops = run("pa", "path", "--name", "there and back", "--link", ids["l1"], "--link", twin)["hops"]
+    assert [h["name"] for h in hops] == ["Camera", "CAN-A", "Gateway", "CAN-A2", "Camera"]
+    assert run("check")["ok"]
+
+
+def test_redundant_deployment_and_cycles(run):
+    ids = _build(run)
+    run("pa", "deploy", ids["vid"], ids["gw"])  # VideoSW also runs on the gateway
+    assert run("show", ids["p"])["issues"] == []  # still on Camera, at the path's start
+    sw = run("create", "component", "--parent", "pa:root-component", "--name", "OS", "--nature", "behavior")["created"]["uuid"]
+    run("pa", "deploy", sw, ids["nav"])
+    data, code = run("pa", "deploy", ids["nav"], sw, ok=False)
+    assert code == 1 and "cycle" in data["error"]

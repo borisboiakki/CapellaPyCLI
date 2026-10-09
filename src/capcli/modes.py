@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any
 
 from .model import (
+    XSI_TYPE,
     LAYERS,
     CapError,
     constraint_text,
@@ -142,10 +143,12 @@ def add_state(model, parent: str, name: str, kind: str = "state", description: s
     region = _region_for(model, par)
     xtype = KINDS[k]
     present = {type_name(s) for s in region.states}
-    if xtype in HOLDERS and (present & set(HOLDERS)) - {xtype}:
+    machine = _machine_of(region)
+    if xtype in HOLDERS and (_holder_kinds(machine) - {xtype}):
         raise CapError(
-            f"Region {region.name!r} already holds {'modes' if xtype == 'State' else 'states'}; "
-            "Arcadia does not mix modes and states in one region"
+            f"State machine {machine.name!r} already holds {'modes' if xtype == 'State' else 'states'}; "
+            "Arcadia's recommended practice is not to mix modes and states in one machine "
+            "(sub-regions included): use the same kind, or another state machine"
         )
     if xtype == "InitialPseudoState" and "InitialPseudoState" in present:
         raise CapError(f"Region {region.name!r} already has an initial state")
@@ -156,6 +159,12 @@ def add_state(model, parent: str, name: str, kind: str = "state", description: s
         st.description = description
     sync_caches(region)
     return {"created": brief(st), "region": brief(region), "machine": brief(_machine_of(region))}
+
+
+def _holder_kinds(machine) -> set[str]:
+    """Which of State / Mode appear anywhere in a state machine."""
+    return {t for el in machine._element.iter() if isinstance(el.tag, str)
+            for t in [el.get(XSI_TYPE, "").rpartition(":")[2]] if t in HOLDERS}
 
 
 def _common_region(source, target):
@@ -199,13 +208,15 @@ def add_transition(model, source: str, target: str, triggers: list[str] | None =
                 raise CapError(f"{brief(ev)} is in a layer below and is not visible from this state machine")
         else:
             same_layer(src, ev)
-        tr.triggers.append(ev)
+        if ev not in tr.triggers:  # a reference list never holds the same element twice
+            tr.triggers.append(ev)
     for ref in effects or []:
         fn = resolve(model, ref)
         if not is_function(fn):
             raise CapError(f"Effects are functions, not {type_name(fn)}")
         same_layer(src, fn)
-        tr.effect.append(fn)
+        if fn not in tr.effect:
+            tr.effect.append(fn)
     if trigger_description:
         tr.trigger_description = trigger_description
     if guard:
@@ -333,9 +344,12 @@ def show(model, uuid: str) -> dict[str, Any]:
     kind = type_name(obj)
     if kind == "StateMachine":
         issues: list[str] = []
+        regions = [_region_tree(model, r, issues) for r in obj.regions]
+        if len(_holder_kinds(obj)) > 1:
+            issues.append("machine mixes modes and states (Arcadia recommends one kind per machine)")
         return with_status({
             **brief(obj), "layer": require_layer(obj), "owner": brief(obj.parent),
-            "regions": [_region_tree(model, r, issues) for r in obj.regions],
+            "regions": regions,
             "issues": issues,
         }, obj)
     if kind in STATE_TYPES:

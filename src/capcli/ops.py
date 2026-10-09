@@ -70,7 +70,7 @@ def create_component(
 ):
     par = resolve(model, parent)
     key = _require_layer(par)
-    _check_structure_rules(key, par, actor)
+    _check_structure_rules(key, par, actor, root_component(model, key))
     if key == "oa":
         attr = "entities"
     elif key == "pa" and hasattr(par, "owned_components"):
@@ -93,13 +93,17 @@ def create_component(
     return {"created": brief(comp), "parent": brief(par)}
 
 
-def _check_structure_rules(key: str, parent, actor: bool) -> None:
+def _check_structure_rules(key: str, parent, actor: bool, root=None) -> None:
     """Enforce the Arcadia structure rules that capellambse does not.
 
     - System Analysis treats the system as a black box: the System is its
       only component, so no sub-systems (or second systems) can be created.
     - Actors are external to the system: in SA, LA and PA they live in the
       Structure package (or a sub-package), never inside a component.
+    - In LA and PA the logical/physical system is the only non-actor
+      component directly in the Structure package: a second one breaks
+      capellambse's ``root_component``. (Packages *inside* the system may
+      hold components: Capella does that.)
     """
     if key == "oa":
         return
@@ -116,6 +120,12 @@ def _check_structure_rules(key: str, parent, actor: bool) -> None:
             "only SA component. Decompose it in the Logical Architecture "
             "(--parent la:root-component), or create an external system as an "
             "actor (--actor --parent sa:structure)"
+        )
+    if not actor and root is not None and parent == root.parent:
+        raise CapError(
+            f"{root.name!r} is the only top-level component of {key.upper()}: create "
+            f"components inside it (--parent {key}:root-component), or an actor "
+            f"(--actor --parent {key}:structure)"
         )
 
 
@@ -135,6 +145,11 @@ def structure_violations(model) -> list[dict[str, Any]]:
                 problem = (
                     "SA is a black box: the System must be the only SA component; "
                     "model sub-systems as logical components in LA"
+                )
+            elif not actor and comp != root and parent == root.parent:
+                problem = (
+                    f"second top-level component next to {root.name!r}; move it inside "
+                    f"(`capcli move <uuid> {key}:root-component`)"
                 )
             if problem:
                 out.append({**brief(comp), "layer": key, "problem": problem})
@@ -323,7 +338,7 @@ def unrealize(model, element: str, realized: str):
 _SETTABLE_SCALARS = (str, bool, int, float)
 
 
-def set_attrs(model, element: str, values: dict[str, str]):
+def set_attrs(model, element: str, values: dict[str, Any]):
     obj = resolve(model, element)
     changed = {}
     for key, raw in values.items():
@@ -349,23 +364,30 @@ def set_attrs(model, element: str, values: dict[str, str]):
                 f"{key!r} is a reference; use allocate/realize/create commands instead"
             )
         value: Any = raw
+        # Values come as strings from the command line, or as JSON values
+        # (true, 42, 1.5) from batch: accept both.
+        text = str(raw).lower() if isinstance(raw, bool) else str(raw)
         if isinstance(current, bool):
-            if raw.lower() not in ("true", "false"):
-                raise CapError(f"{key!r} expects true/false")
-            value = raw.lower() == "true"
-        elif isinstance(current, int):
-            value = int(raw)
-        elif isinstance(current, float):
-            value = float(raw)
+            if text.lower() not in ("true", "false"):
+                raise CapError(f"{key!r} expects true or false, got {raw!r}")
+            value = text.lower() == "true"
+        elif isinstance(current, (int, float)):
+            kind = int if isinstance(current, int) else float
+            try:
+                value = kind(text)
+            except ValueError:
+                raise CapError(f"{key!r} expects {'an integer' if kind is int else 'a number'}, got {raw!r}") from None
         elif hasattr(current, "name") and hasattr(current, "value"):  # enum
             allowed = [m.name for m in type(current)]
-            value = raw.upper()
+            value = text.upper()
             if value not in allowed:
                 raise CapError(f"{key!r} must be one of {', '.join(allowed)}")
         elif current is not None and not isinstance(current, _SETTABLE_SCALARS):
             # Markup (description) and other str-likes are fine; refuse the rest.
             if not isinstance(current, str):
                 raise CapError(f"{key!r} has unsupported type {type(current).__name__}")
+        if isinstance(value, (int, float)) and not isinstance(current, (bool, int, float)):
+            value = text  # e.g. name: 42 in a batch
         try:
             setattr(obj, key, value)
         except Exception as e:  # noqa: BLE001
@@ -378,11 +400,21 @@ def set_attrs(model, element: str, values: dict[str, str]):
 
 # Relationship elements that are meaningless once one of their ends is gone
 # and can therefore be removed together with it (``delete --cascade``).
+# Matching the metaclass alone is not enough: ``CapabilityRealization`` (an
+# LA/PA capability) or ``StateTransition`` also match, and must not be
+# deleted because a constraint they point to (``preCondition``, ``guard``)
+# goes. So a referrer is cascaded only when it references through one of its
+# *end* attributes (``_END_ATTRS``).
 _CASCADABLE = re.compile(
     r"(Exchange|CommunicationMean|Allocation|Realization|Involvement\w*|"
-    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition|"
+    r"Link|^Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition|"
     r"InterfaceImplementation|InterfaceUse)$"
 )
+_END_ATTRS = {
+    "source", "target", "sourceElement", "targetElement", "involved", "linkEnds",
+    "abstractType", "super", "sub", "included", "extended", "capability",
+    "allocatedItem", "implementedInterface", "usedInterface", "location", "deployedElement",
+}
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
 # List-valued references that only say "this exchange/port carries that item".
 # Deleting the item must detach it from them, never delete the carrier.
@@ -396,6 +428,8 @@ _DETACHABLE_ATTRS = {
     "entry", "exit", "doActivity",
     # Interfaces provided/required by component ports.
     "providedInterfaces", "requiredInterfaces",
+    # Constraints an element points to: deleting the constraint clears them.
+    "preCondition", "postCondition", "guard", "exchangeContext",
 }
 # Same, for attribute names that are too generic to detach on every element.
 _DETACHABLE_TYPED = {("PhysicalLinkCategory", "links")}
@@ -409,7 +443,13 @@ def _detachable(el, attr: str) -> bool:
 # never a reason to refuse a delete.
 _ALWAYS_DETACH_ATTRS = {"involvedStates", "referencedStates"}
 _REF_TOKEN = re.compile(r"#([A-Za-z0-9_-]+)$")
-_NON_REF_ATTRS = {"id", "name", "description", "summary", "review", "sid"}
+# Free-text attributes: a value like "#42" there is text, not a reference.
+_NON_REF_ATTRS = {"id", "name", "description", "summary", "review", "sid", "value", "text",
+                  "label", "comment", "documentation", "content"}
+# Port attributes that make a port meaningful on its own (see ``delete``).
+_PORT_CONTENT_ATTRS = ("providedInterfaces", "requiredInterfaces",
+                       "incomingExchangeItems", "outgoingExchangeItems")
+_TEXT_LINK = re.compile(r"(?:hlink://|href=\")#?([A-Za-z0-9_-]{8,})")
 
 
 def _xtype(elem) -> str:
@@ -439,7 +479,7 @@ def iter_refs(model, visual: bool = False):
             if not isinstance(el.tag, str):
                 continue
             for attr, value in el.attrib.items():
-                if attr in _NON_REF_ATTRS or "#" not in value:
+                if attr in _NON_REF_ATTRS or attr.startswith("ReqIF") or "#" not in value:
                     continue
                 tokens = value.split()
                 ids = [m.group(1) for t in tokens if (m := _REF_TOKEN.search(t))]
@@ -447,6 +487,21 @@ def iter_refs(model, visual: bool = False):
                     continue  # free text that happens to contain '#'
                 for i in ids:
                     yield el, attr, i
+
+
+def iter_text_links(model):
+    """Yield (element, id) for links inside text: descriptions and constraint bodies."""
+    for root in _semantic_roots(model):
+        for el in root.iter():
+            if not isinstance(el.tag, str):
+                continue
+            texts = [el.get("description") or ""]
+            if el.tag == "bodies":
+                texts.append(el.text or "")
+            for text in texts:
+                if "hlink://" in text or "href=" in text:
+                    for m in _TEXT_LINK.finditer(text):
+                        yield _owning_element(el), m.group(1)
 
 
 def _owning_element(el):
@@ -460,13 +515,19 @@ def delete(model, element: str, cascade: bool = False):
     if layer_key(obj) is None or obj._element.getparent() is None:
         raise CapError("Refusing to delete a layer or model root")
     key = layer_key(obj)
-    if type_name(obj).endswith("Pkg") or obj in (
+    layer_el = obj.layer._element
+    if obj._element.getparent() is layer_el or obj in (
         root_function(model, key),
-        getattr(obj.layer, "root_component", None),
+        root_component(model, key),
     ):
-        raise CapError("Refusing to delete a package or a layer's root function/component")
+        raise CapError("Refusing to delete a layer's root package, function or component; "
+                       "delete what is inside it instead")
 
     doomed = {obj._element}
+    if _is_component(obj):
+        # The component's own Parts go with it: they are its instances, not
+        # independent referrers (otherwise even a fresh component needs --cascade).
+        doomed.update(p._element for p in model.search("Part") if p.type == obj)
 
     def doomed_ids():
         return {
@@ -499,7 +560,7 @@ def delete(model, element: str, cascade: bool = False):
                 if not cascade:
                     blockers.append(info)
                 continue  # detached below
-            if cascade and _CASCADABLE.search(info["type"]):
+            if cascade and el is owner and attr in _END_ATTRS and _CASCADABLE.search(info["type"]):
                 extra.append(owner)
             else:
                 blockers.append(info)
@@ -528,13 +589,17 @@ def delete(model, element: str, cascade: bool = False):
     detached = []
     for el, attr, ref in list(iter_refs(model)):
         if (_detachable(el, attr) or attr in _ALWAYS_DETACH_ATTRS) and ref in ids and not inside_doomed(el):
+            if el.get(attr) is None:
+                continue  # the same id was listed twice and is already gone
             tokens = [t for t in el.get(attr).split() if t.rpartition("#")[2] != ref]
             if tokens:
                 el.set(attr, " ".join(tokens))
             else:
                 del el.attrib[attr]
             detached.append({"from": el.get("id"), "type": _xtype(el), "attr": attr, "item": ref})
-    diagram_refs = {ref for _, _, ref in iter_refs(model, visual=True) if ref in ids}
+    affected_chains = _chains_losing_parts(model, doomed, inside_doomed)
+    text_links = [{"uuid": o.get("id"), "type": _xtype(o), "name": o.get("name"), "links_to": i}
+                  for o, i in iter_text_links(model) if i in ids and o is not None and not inside_doomed(o)]
     removed = []
     for el in doomed:
         if any(a in doomed for a in el.iterancestors()):
@@ -549,20 +614,47 @@ def delete(model, element: str, cascade: bool = False):
             port = model._loader[pid]
         except KeyError:
             continue
+        if any(port.get(a) for a in _PORT_CONTENT_ATTRS):
+            continue  # it still provides interfaces or carries items: keep it
         if _xtype(port).endswith("Port") and port.getparent() is not None:
             removed.append({"uuid": pid, "type": _xtype(port), "name": port.get("name")})
             model._loader.idcache_remove(port)
             port.getparent().remove(port)
 
+    removed_ids = ids | {r["uuid"] for r in removed}
+    diagram_refs = {ref for _, _, ref in iter_refs(model, visual=True) if ref in removed_ids}
     result: dict[str, Any] = {"deleted": removed}
     if detached:
         result["detached"] = detached
+    if affected_chains:
+        result["affected_chains"] = affected_chains
+        result["chain_warning"] = ("functional chains lost functions or exchanges; "
+                                   "run `capcli chain show <chain>` and fix their issues")
+    if text_links:
+        result["text_links"] = text_links
+        result["text_warning"] = ("descriptions or constraint texts still link to deleted "
+                                  "elements; edit them with `capcli set`")
     if diagram_refs:
         result["warning"] = (
             f"{len(diagram_refs)} deleted element(s) appear on diagrams; open the "
             "model in Capella and refresh/clean the affected diagrams"
         )
     return result
+
+
+def _chains_losing_parts(model, doomed, inside_doomed) -> list[dict[str, Any]]:
+    """Chains that keep existing but lose some of their involvements."""
+    out, seen = [], set()
+    for d in doomed:
+        for e in d.iter():
+            if not isinstance(e.tag, str) or not _xtype(e).startswith("FunctionalChainInvolvement"):
+                continue
+            chain = e.getparent()
+            if chain is None or inside_doomed(chain) or chain.get("id") in seen:
+                continue
+            seen.add(chain.get("id"))
+            out.append({"uuid": chain.get("id"), "type": _xtype(chain), "name": chain.get("name")})
+    return out
 
 
 def _dedupe(items):
@@ -655,6 +747,10 @@ OPS: dict[str, Callable[..., dict[str, Any]]] = {
 }
 
 
+# Only whole strings like "$f1" are aliases: "$5 budget" is plain text.
+_ALIAS_REF = re.compile(r"\$[A-Za-z_][\w-]*")
+
+
 def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Run several operations; ``"$alias"`` refers to an earlier step's result.
 
@@ -663,17 +759,23 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """
     aliases: dict[str, str] = {}
     results = []
+    if not isinstance(steps, list):
+        raise CapError("batch input must be a JSON list of steps")
     for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            raise CapError(f"step {i}: expected an object like {{\"op\": ..., ...}}, got {type(step).__name__}")
         step = dict(step)
         op = step.pop("op", None)
         alias = step.pop("as", None)
         if op not in OPS:
             raise CapError(f"step {i}: unknown op {op!r}; known: {', '.join(OPS)}")
 
-        def sub(v):
-            if isinstance(v, str) and v.startswith("$"):
+        def sub(v, i=i):
+            if isinstance(v, str) and v.startswith("$$"):
+                return v[1:]  # escaped literal "$..."
+            if isinstance(v, str) and _ALIAS_REF.fullmatch(v):
                 if v[1:] not in aliases:
-                    raise CapError(f"step {i}: unknown alias {v}")
+                    raise CapError(f"step {i}: unknown alias {v} (write $$ for a literal $)")
                 return aliases[v[1:]]
             if isinstance(v, dict):
                 return {k: sub(x) for k, x in v.items()}
@@ -688,12 +790,18 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             kwargs["cls"] = kwargs.pop("class")  # `class` is a Python keyword
         if "layer" in kwargs and "layer_name" in inspect.signature(OPS[op]).parameters:
             kwargs["layer_name"] = kwargs.pop("layer")  # every create op taking a layer
+        if isinstance(kwargs.get("layer_name"), str):
+            kwargs["layer_name"] = kwargs["layer_name"].lower()  # "LA" works like on the CLI
+        params = inspect.signature(OPS[op])
+        try:
+            params.bind(model, **kwargs)
+        except TypeError as e:
+            known = ", ".join(p for p in list(params.parameters)[1:])
+            raise CapError(f"step {i} ({op}): bad arguments: {e}; {op} takes: {known}") from None
         try:
             res = OPS[op](model, **kwargs)
         except CapError as e:
             raise CapError(f"step {i} ({op}): {e}") from None
-        except TypeError as e:
-            raise CapError(f"step {i} ({op}): bad arguments: {e}") from None
         if alias:
             created = res.get("created")
             if not created:

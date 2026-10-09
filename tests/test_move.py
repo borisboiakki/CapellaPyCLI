@@ -129,3 +129,52 @@ def test_reorder(run):
     data, code = run("reorder", ids["a"], "--first", "--last", ok=False)
     assert code == 1 and "exactly one" in data["error"]
     assert run("check")["ok"]
+
+
+WEATHER, PREY = "4bf0356c-89dd-45e9-b8a6-e0332c026d33", "b805a725-4b13-4b77-810e-b0ba002d5d98"
+
+
+def test_move_oa_entity_moves_part_and_communication_mean(run, model):
+    cm = run("create", "component-exchange", "--source", WEATHER, "--target", PREY, "--name", "rain")["created"]["uuid"]
+    res = run("move", WEATHER, "oa:root-entity")
+    assert res["part_moved"]["type"] == "Part"
+    assert cm in {r["uuid"] for r in res["rehomed"]}
+    tree = etree.parse(str(model / "Model Test 7.0.capella"))
+    part = next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("abstractType") == "#" + WEATHER)
+    assert part.tag == "ownedParts"  # in the entity package now, next to the entity
+    assert run("check")["ok"]
+
+
+def test_package_move_rehomes_exchanges(run):
+    ids = _ids(run("batch", input=json.dumps([
+        {"op": "create-component", "as": "cc", "parent": "la:root-component", "name": "CC"},
+        {"op": "create-package", "as": "p", "parent": "la:root-component", "name": "P"},
+        {"op": "create-component", "as": "a", "parent": "$p", "name": "A"},
+        {"op": "create-component", "as": "b", "parent": "$p", "name": "B"},
+        {"op": "create-component-exchange", "as": "x", "source": "$a", "target": "$b", "name": "x"},
+    ])))
+    res = run("move", ids["p"], ids["cc"])
+    assert [r["uuid"] for r in res["rehomed"]] == [ids["x"]]
+    assert run("show", ids["x"])["parent"]["uuid"] == ids["cc"]
+
+
+def test_roots_cannot_be_moved_or_reordered(run):
+    pkg = run("package", "create", "--parent", "la:functions", "--name", "P")["created"]["uuid"]
+    for args in (("move", "la:root-function", pkg), ("move", "la:root-component", "la:structure"),
+                 ("move", "la:functions", pkg)):
+        data, code = run(*args, ok=False)
+        assert code == 1 and "root" in data["error"], data
+    project = run("info")["layers"]["la"]["uuid"]
+    data, code = run("reorder", project, "--first", ok=False)
+    assert code == 1 and "Cannot reorder" in data["error"]
+
+
+def test_second_root_component_is_refused_and_tolerated(run, model):
+    data, code = run("create", "component", "--parent", "pa:structure", "--name", "X", "--nature", "node", ok=False)
+    assert code == 1 and "only top-level component" in data["error"]
+    m = capellambse.MelodyModel(str(model / "Model Test 7.0.aird"))  # as another tool could write it
+    m.pa.component_pkg.components.create("PhysicalComponent", name="Rogue")
+    m.save()
+    data, code = run("check", ok=False)  # still runs, and reports it
+    assert code == 2 and [v["name"] for v in data["structure"]] == ["Rogue"]
+    assert run("show", "pa:root-component")["name"] == "Physical System"

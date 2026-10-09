@@ -16,6 +16,8 @@ SA "Predefined Types" (Boolean, Integer, String, …), but not the reverse.
 
 from __future__ import annotations
 
+import re
+
 from typing import Any
 
 from .model import (
@@ -37,7 +39,9 @@ TYPE_METACLASSES = (
     "NumericType", "StringType", "PhysicalQuantity",
 )
 MECHANISMS = ("UNSET", "FLOW", "OPERATION", "EVENT", "SHARED_DATA")
-KINDS = ("ASSOCIATION", "AGGREGATION", "COMPOSITION")
+# Capella leaves aggregationKind out (UNSET) on plain attributes; only
+# association ends say ASSOCIATION/AGGREGATION/COMPOSITION.
+KINDS = ("UNSET", "ASSOCIATION", "AGGREGATION", "COMPOSITION")
 
 # Attributes that carry exchange items, per carrier metaclass.
 CARRIER_ATTR = {
@@ -82,13 +86,18 @@ def _check_type(element_layer: str, typ) -> None:
 
 def _card(raw) -> str:
     v = str(raw).strip()
-    if v != "*" and not v.isdigit():
+    if v == "*":
+        return v
+    if not re.fullmatch(r"[0-9]+", v):  # not str.isdigit(): it accepts "²" and "٣"
         raise CapError(f"Multiplicity must be a number or '*', got {raw!r}")
-    return v
+    return str(int(v))
 
 
-def _set_cards(model, obj, min_card, max_card) -> None:
-    """Write ownedMinCard / ownedMaxCard the way Capella does (see module doc)."""
+def _set_cards(model, obj, min_card, max_card) -> str:
+    """Write ownedMinCard / ownedMaxCard the way Capella does (see module doc).
+
+    Returns the multiplicity as written, e.g. ``"0..*"``.
+    """
     lo, hi = _card(min_card), _card(max_card)
     if lo == "*":
         raise CapError("The minimum multiplicity cannot be '*'")
@@ -101,6 +110,7 @@ def _set_cards(model, obj, min_card, max_card) -> None:
             model._loader.idcache_remove(old)
             el.remove(old)
         add_xml_child(model, el, tag, f"{alias}:LiteralNumericValue", value=value)
+    return f"{lo}..{hi}"
 
 
 def _cards(obj) -> tuple[str | None, str | None]:
@@ -122,7 +132,7 @@ def create_class(model, name: str, layer_name: str | None = None, parent: str | 
 
 
 def add_property(model, cls: str, name: str, type: str, min: str = "1", max: str = "1",
-                 kind: str = "ASSOCIATION", description: str | None = None):
+                 kind: str = "UNSET", description: str | None = None):
     owner = resolve(model, cls)
     if type_name(owner) not in ("Class", "Union"):
         raise CapError(f"Properties belong to classes and unions, got {type_name(owner)} {owner.uuid}")
@@ -133,11 +143,14 @@ def add_property(model, cls: str, name: str, type: str, min: str = "1", max: str
         raise CapError(f"--kind must be one of {', '.join(KINDS)}")
     if any(p.name == name for p in owner.owned_properties):
         raise CapError(f"{brief(owner)} already has a property named {name!r}")
-    prop = owner.owned_properties.create("Property", name=name, type=typ, aggregation_kind=kind)
-    _set_cards(model, prop, min, max)
+    # Capella writes union members as UnionProperty.
+    metaclass = "UnionProperty" if type_name(owner) == "Union" else "Property"
+    kw = {} if kind == "UNSET" else {"aggregation_kind": kind}
+    prop = owner.owned_properties.create(metaclass, name=name, type=typ, **kw)
+    mult = _set_cards(model, prop, min, max)
     if description:
         prop.description = description
-    return {"created": brief(prop), "class": brief(owner), "type": brief(typ), "multiplicity": f"{min}..{max}"}
+    return {"created": brief(prop), "class": brief(owner), "type": brief(typ), "multiplicity": mult}
 
 
 def create_enumeration(model, name: str, layer_name: str | None = None, parent: str | None = None,
@@ -193,8 +206,8 @@ def add_element(model, exchange_item: str, name: str, type: str, min: str = "1",
     # Same defaults as an element created in Capella.
     el._element.set("direction", "UNSET")
     el._element.set("composite", "true")
-    _set_cards(model, el, min, max)
-    return {"created": brief(el), "exchange_item": brief(ei), "type": brief(typ), "multiplicity": f"{min}..{max}"}
+    mult = _set_cards(model, el, min, max)
+    return {"created": brief(el), "exchange_item": brief(ei), "type": brief(typ), "multiplicity": mult}
 
 
 def assign(model, exchange_item: str, elements: list[str], remove: bool = False):
@@ -245,6 +258,14 @@ def types(model, layer_name: str, name: str | None = None):
     return {"layer": layer_name, "count": len(out), "items": out}
 
 
+def _brief_id(model, uuid):
+    """brief() of an element by id, or None for elements capellambse can't load."""
+    try:
+        return brief(model.by_uuid(uuid))
+    except KeyError:
+        return None
+
+
 def _typed_users(model, obj) -> list[dict[str, Any]]:
     users = []
     for el in model._loader.xpath(f"//*[@abstractType='#{obj.uuid}']"):
@@ -253,7 +274,7 @@ def _typed_users(model, obj) -> list[dict[str, Any]]:
                 u = model.by_uuid(el.get("id"))
             except KeyError:
                 continue
-            if type_name(u) in ("Property", "ExchangeItemElement"):
+            if type_name(u) in ("Property", "UnionProperty", "ExchangeItemElement"):
                 users.append({**brief(u), "of": brief(u.parent)})
     return users
 
@@ -297,7 +318,8 @@ def show(model, uuid: str) -> dict[str, Any]:
             f"//*[contains(concat(' ', @exchangedItems, ' ', @convoyedInformations, ' ', "
             f"@incomingExchangeItems, ' ', @outgoingExchangeItems, ' '), ' #{obj.uuid} ')]"
         ):
-            carriers.append(brief(model.by_uuid(el.get("id"))))
+            if (b := _brief_id(model, el.get("id"))) is not None:
+                carriers.append(b)
         d["carried_by"] = carriers
         if not d["elements"]:
             issues.append("exchange item has no elements")
@@ -309,10 +331,9 @@ def show(model, uuid: str) -> dict[str, Any]:
         raise CapError(f"{kind} is not a data element; use `capcli show`")
     if kind in GENERALIZABLE:
         d["specializes"] = [brief(g.super) for g in obj.generalizations if g.super is not None]
-        d["specialized_by"] = [
-            brief(model.by_uuid(el.getparent().get("id")))
-            for el in model._loader.xpath(f"//ownedGeneralizations[@super='#{obj.uuid}']")
-        ]
+        subs = [_brief_id(model, el.getparent().get("id"))
+                for el in model._loader.xpath(f"//ownedGeneralizations[@super='#{obj.uuid}']")]
+        d["specialized_by"] = [b for b in subs if b is not None]
     d["issues"] = issues
     return d
 
@@ -375,10 +396,10 @@ def create_collection(model, name: str, type: str, layer_name: str | None = None
     _check_type(require_layer(pkg), typ)
     col = pkg.collections.create("Collection", name=name)
     col.type.append(typ)
-    _set_cards(model, col, min, max)
+    mult = _set_cards(model, col, min, max)
     if description:
         col.description = description
-    return {"created": brief(col), "parent": brief(pkg), "item_type": brief(typ), "multiplicity": f"{min}..{max}"}
+    return {"created": brief(col), "parent": brief(pkg), "item_type": brief(typ), "multiplicity": mult}
 
 
 GENERALIZABLE = ("Class", "Union", "Enumeration", "Collection")

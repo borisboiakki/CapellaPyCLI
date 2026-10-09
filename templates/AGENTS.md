@@ -41,8 +41,8 @@ text edit silently breaks them.
 8. After changing a capability, run `capcli capability show <cap>` and look
    at its `issues`. Every SA/LA/PA capability should realize one in the layer
    above, and involve the components that its functions are allocated to.
-9. A region holds either **modes** or **states**, never both, and each
-   sub-region gets at most one initial state. capcli enforces this. Check
+9. A state machine holds either **modes** or **states**, never both (sub-regions
+   included), and each region gets at most one initial state. capcli enforces this. Check
    `capcli mode show <machine>` for `issues` after editing a state machine.
 10. In PA, physical ports and links connect **node** components; behaviour
     components are **deployed** on nodes (`capcli pa deploy`). A component
@@ -100,7 +100,8 @@ capcli realize <la-function> <sa-function>    # traceability to the layer above
                                               # (also states, modes and transitions)
 capcli set <uuid> name="new name" description="<p>html</p>"
 capcli delete <uuid>                          # refuses while referenced
-capcli --dry-run delete <uuid> --cascade      # preview what cascade removes
+capcli --dry-run delete <uuid> --cascade      # preview what cascade removes; read its
+                                              # affected_chains / text_links warnings
 
 # Functional chains (operational processes in OA)
 capcli chain list la [--involving <fn-or-exchange>]
@@ -252,3 +253,4 @@ functions), `create-link-category` (`"parent"`, `"name"`), `link-category-links`
 (`"category"`, `"links"`, `"remove"`), `reorder` (`"element"`, `"before"`, `"after"`,
 `"first"`, `"last"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.
+A text that starts with `$` is fine (`"$5 budget"`); write `$$` for a literal `$name`.

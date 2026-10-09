@@ -67,6 +67,7 @@ tests/
   test_modes.py         modes and states
   test_physical.py      physical architecture
   test_move.py          packages, move, reorder, repair structure
+  test_integrity.py     delete, check, batch and the CLI's JSON contract
   test_interfaces.py    interfaces
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
@@ -116,7 +117,9 @@ why the shared helpers live in `model.py`).
    it, or any unexpected exception, into `{"error": "..."}` with exit code 1.
    Nothing is saved after an error.
 
-Exit codes: **0** ok, **1** error, **2** `check` found problems.
+Exit codes: **0** ok, **1** error (also click usage errors, which `main()`
+turns into JSON), **2** `check` found problems. `main()` forces UTF-8 on
+stdout. A write whose result is `{"unchanged": true}` is not saved.
 
 ### Operations and batch
 
@@ -127,7 +130,10 @@ in an `OPS` dict (`ops.OPS`, `chains.OPS`, `capabilities.OPS`).
 `capcli batch` (`ops.run_batch`) runs a JSON list of steps against one loaded
 model and saves only if every step succeeds, so it is all-or-nothing.
 `"as": "x"` stores the UUID from a step's `result["created"]`, and `"$x"` in
-later steps (also inside lists and dicts) is replaced with it. Batch arguments
+later steps (also inside lists and dicts) is replaced with it. Only whole
+strings shaped like an alias are substituted (`"$5 budget"` is text), and
+`$$` escapes a literal `$`. Arguments are checked against the op's signature
+before it runs, so a `TypeError` inside an op is a bug, not "bad arguments". Batch arguments
 are the op's keyword names, with `-` normalized to `_`. There are a few
 explicit aliases in `run_batch`: `from` → `from_`, `class` → `cls`
 (`add-property`), and `layer` → `layer_name` for any op whose function
@@ -165,22 +171,34 @@ lxml tree directly (`obj._element`, `model._loader`):
 
 - `iter_refs(model)`: every `#id` reference in semantic files (or visual ones,
   with `visual=True`).
-- `delete`: computes everything that references the element's subtree.
-  Without `--cascade`, it refuses. With `--cascade`, it removes referrers whose
-  metaclass matches `_CASCADABLE` (exchanges, allocations, realizations,
-  involvements, Parts, ports, include/extend/generalization/exploitation),
-  repeated until nothing new is found. Ports left without exchanges are
-  removed too. References in `_DETACHABLE_ATTRS` (exchange items carried by
-  exchanges and ports, `availableInStates`, a transition's `effect` and
-  `triggers`, a state's `entry`/`exit`/`doActivity`, interfaces of component
-  ports; plus a physical link category's `links` through the type-scoped
-  `_DETACHABLE_TYPED`) are *detached* under `--cascade`: the ID is removed from the
-  list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state caches
-  `involvedStates` / `referencedStates`) are updated even without
+- `delete`: computes everything that references the element's subtree
+  (a component's own Parts are added up front). Without `--cascade`, it
+  refuses. With `--cascade`, it removes a referrer only if its metaclass
+  matches `_CASCADABLE` (exchanges, allocations, realizations, involvements,
+  Parts, ports, include/extend/generalization/exploitation, transitions)
+  **and** it references through one of its end attributes (`_END_ATTRS`:
+  `source`, `target`, `sourceElement`, `targetElement`, `involved`, …),
+  repeated until nothing new is found. The metaclass alone is not enough:
+  `CapabilityRealization` (an LA/PA capability) and `StateTransition` match
+  too, and must survive the deletion of their precondition or guard.
+  References in `_DETACHABLE_ATTRS` (exchange items carried by exchanges and
+  ports, `availableInStates`, a transition's `effect`, `triggers` and
+  `guard`, a state's `entry`/`exit`/`doActivity`, interfaces of component
+  ports, `preCondition`/`postCondition`, a chain link's `exchangeContext`;
+  plus a physical link category's `links` through the type-scoped
+  `_DETACHABLE_TYPED`) are *detached* under `--cascade`: the ID is removed
+  from the list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state
+  caches `involvedStates` / `referencedStates`) are updated even without
   `--cascade`. A `PhysicalPathInvolvement` referrer means a link or node
   inside a physical path: with `--cascade` the whole path is deleted (a path
-  missing a hop is meaningless), otherwise the path blocks the delete. Any other referrer blocks the delete. Diagram references are
-  only reported as a warning.
+  missing a hop is meaningless), otherwise the path blocks the delete. Any
+  other referrer blocks the delete. Ports left without exchanges are removed
+  too, unless they still provide/require interfaces or carry items. The
+  result also lists `affected_chains` (chains that lost an involvement),
+  `text_links` (descriptions and constraint bodies that link to a deleted id,
+  see `iter_text_links`) and a diagram warning.
+- `iter_refs` skips free-text attributes (`_NON_REF_ATTRS`, `ReqIF*`): a
+  name like `#42` is not a reference.
 - Removing an element: `model._loader.idcache_remove(el)` and then
   `el.getparent().remove(el)`. Always do both.
 - `check`: dangling refs, empty required refs, realization links without
@@ -216,6 +234,8 @@ Check these again when upgrading capellambse.
 | `DataPkg.enumerations` is a filter, but creating through it works; `ExchangeItemElement.abstract_type` is deprecated | Create enumerations with `data_types.create("Enumeration")`; use `type` |
 | Exchange items: functional exchanges use `exchanged_items`, function ports `exchange_items` (`incoming`/`outgoingExchangeItems` in XML), component exchanges `convoyed_informations` (`allocated_exchange_items` is deprecated); component ports carry interfaces, not items | `data.CARRIER_ATTR` |
 | Regions don't get `involvedStates`, states don't get `referencedStates` or their own sub-region "region" (Capella always has all three) | `modes.sync_caches()` after every state change; `add_state` creates the region; `check --fix` rebuilds caches |
+| `PhysicalPath.involved_items.append()` skips an item already in the path, so a ring (A, L1, B, L2, A) loses its first node | `physical.create_path` writes one involvement per hop with `add_xml_child` |
+| `Union.owned_properties.create("Property")` works, but Capella writes union members as `UnionProperty`; a `Property` gets `aggregationKind` even for a plain attribute | `data.add_property` picks `UnionProperty` in unions and leaves the kind out by default (`UNSET`) |
 | A new `Constraint` has no `ownedSpecification`, and `specification[...] = …` raises (it is `None`) | `model.set_constraint` writes the `OpaqueExpression` (`bodies` + `languages`) with `model.add_xml_child` |
 | `StateTransition.effects` is deprecated; the accessor is `effect` (a list) | Use `effect` |
 | Deployment: capellambse also offers `InstanceDeploymentLink`, but Capella uses `PartDeploymentLink`, owned by the host's Part (`location` = host Part, `deployedElement` = deployed Part) | `physical.deploy` |
@@ -240,8 +260,10 @@ Check these again when upgrading capellambse.
    to the one directly above (`oa ← sa ← la ← pa`). Data is the exception:
    a type or exchange item may come from the same layer or any layer above
    (an LA property typed by SA's `Integer`), never from a layer below.
-3. **Modes vs states**: a region holds modes or states, never both, and at
-   most one initial pseudo-state (`modes.add_state`).
+3. **Modes vs states**: a state machine holds modes or states, never both,
+   in any of its regions (Arcadia's recommended practice; `modes._holder_kinds`),
+   and a region has at most one initial pseudo-state (`modes.add_state`).
+   `mode show` reports machines that already mix them.
 4. **Physical architecture**: physical ports and links only on node
    components; a node is never deployed on a behaviour component
    (`physical.py`).
@@ -249,6 +271,9 @@ Check these again when upgrading capellambse.
    `ops.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
    - actors (SA/LA/PA) live in the Structure package, never inside a component;
+   - in LA/PA the system is the only non-actor component directly in the
+     Structure package (a second one makes capellambse's `root_component`
+     raise; `model.root_component` tolerates it so `check` can report it);
    - `is_actor` can't be toggled with `set`;
    - `move` applies the same rules, and moves stay within a layer.
 6. **Every realization has both ends** (`targetElement` and `sourceElement`).

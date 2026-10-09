@@ -2,6 +2,8 @@ import json
 
 from lxml import etree
 
+XSI = "{http://www.w3.org/2001/XMLSchema-instance}type"
+
 
 def _xml(model):
     return etree.parse(str(model / "Model Test 7.0.capella"))
@@ -167,4 +169,26 @@ def test_generalize(run, model):
     run("data", "generalize", sub, base)  # a class of a layer above is visible
     run("delete", base, "--cascade")  # the generalization goes with it
     assert run("show", sub).get("specializes", []) == []
+    assert run("check")["ok"]
+
+
+def test_union_members_attributes_and_multiplicities_match_capella(run, model):
+    integer = _type(run, "la", "Integer")
+    res = run("batch", input=json.dumps([
+        {"op": "create-union", "as": "u", "layer": "la", "name": "U"},
+        {"op": "add-property", "as": "m", "class": "$u", "name": "n", "type": integer, "min": " 01 ", "max": "02"},
+        {"op": "create-class", "as": "c", "layer": "la", "name": "C"},
+        {"op": "add-property", "as": "p", "class": "$c", "name": "count", "type": integer},
+    ]))
+    steps = {s.get("as"): s for s in res["steps"]}
+    assert steps["m"]["multiplicity"] == "1..2"  # normalized, as written
+    tree = _xml(model)
+    member = _by_id(tree, steps["m"]["created"]["uuid"])
+    assert member.get(XSI).endswith(":UnionProperty")
+    attr = _by_id(tree, steps["p"]["created"]["uuid"])
+    assert attr.get("aggregationKind") is None  # a plain attribute, as Capella writes it
+    for bad in ("²", "abc", "-1"):
+        data, code = run("data", "property", "add", steps["c"]["created"]["uuid"], "--name", "x",
+                         "--type", integer, "--min", bad, ok=False)
+        assert code == 1 and "number or '*'" in data["error"], bad
     assert run("check")["ok"]
