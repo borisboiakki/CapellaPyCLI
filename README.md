@@ -79,18 +79,109 @@ global:  --model PATH (or $CAPELLA_MODEL) · --dry-run
 
 See `templates/AGENTS.md` for a full cheat sheet, or `capcli <command> --help`.
 
-## Limits
+## What you can read and change today
 
-- Diagram layout isn't generated: new elements exist in the model but aren't
-  drawn on existing diagrams. `diagrams render` shows diagrams as they were saved.
-- `delete` can't fix diagrams that show deleted elements. It warns you, so you
-  can clean them up in Capella.
-- Functional chains: simple chains (functions + exchanges) are fully supported.
-  Control nodes and sequence links of complex chains (AND/OR/ITERATE) are kept
-  but can't be edited, and `chain show` ignores them. Exchange contexts and
-  exchanged items on chain links aren't editable either.
-- Deeper changes (scenarios, data models, PVMT) need a
-  capellambse script for now. They are good candidates for new `ops`.
+Capella models are organised in four layers. capcli calls them `oa`
+(Operational Analysis), `sa` (System Analysis), `la` (Logical Architecture)
+and `pa` (Physical Architecture). Everything below was checked against the
+Capella 7.0 test model in `tests/data/model`.
+
+Legend:
+
+- ✅ supported
+- 🟡 partly supported (see the notes)
+- 👁 read only
+- ❌ not possible with capcli
+
+### Reading
+
+Reading is broad. Every element in the model can be found and inspected, even
+the kinds capcli can't create or modify.
+
+| What | How | Notes |
+|---|---|---|
+| Model overview | `capcli info` | Capella version, number of diagrams, element counts per layer |
+| Element lists per layer | `capcli list <layer> <kind>` | See the table of kinds below. `--name` filters by name |
+| Any element by name or type | `capcli search <text> [--type <Metaclass>] [--layer <layer>]` | Any metaclass works, e.g. `Scenario`, `StateMachine`, `State`, `Mode`, `ExchangeItem`, `Class`, `Constraint`, `PropertyValueGroup`, `Part`. Parts and ports only show up when you ask for them with `--type` |
+| Element details | `capcli show <uuid>` | Name, description, parent, sub-functions or sub-components, ports, incoming and outgoing exchanges with the functions at each end, allocation, realizations, chains involved in, diagrams it appears on |
+| Any attribute | `capcli show <uuid> --attr <name>` | Any capellambse attribute, e.g. scenario `messages`, class `properties`, exchange item `elements`, property `value`, capability `involved_components`. If the attribute is named `uuid`, `type` or `layer`, it is returned as `attr_uuid`, `attr_type` or `attr_layer` |
+| Breakdown | `capcli tree <uuid> --depth N` | Functions with the component each is allocated to, or components with their sub-components |
+| Functional chains | `capcli chain list / show` | Ordered steps, entry and exit functions, and integrity issues |
+| Diagrams | `capcli diagrams list / render` | Lists diagrams (name, type, target) and renders one to SVG, as saved in the `.aird` |
+| Model health | `capcli check`, `capcli validate` | Broken or empty references, and capellambse's validation rules |
+
+Kinds available in `capcli list <layer> <kind>`:
+
+| Kind | oa | sa | la | pa |
+|---|:-:|:-:|:-:|:-:|
+| `functions` (activities in OA), `function-exchanges` | ✅ | ✅ | ✅ | ✅ |
+| `activities`, `activity-exchanges`, `entities`, `entity-exchanges`, `operational-processes`, `processes` | ✅ | | | |
+| `components`, `component-exchanges` | | ✅ | ✅ | ✅ |
+| `actors` | ✅ | ✅ | ✅ | ✅ |
+| `actor-exchanges` | | ✅ | ✅ | |
+| `capabilities` | ✅ | ✅ | ✅ | ✅ |
+| `missions`, `capability-exploitations` | | ✅ | | |
+| `functional-chains` | ✅¹ | ✅ | ✅ | ✅ |
+| `physical-links`, `physical-paths`, `physical-exchanges` | | | | ✅ |
+| `requirements`, `requirement-types`, `relation-types` | ✅ | ✅ | ✅ | ✅ |
+| `classes`, `collections`, `complex-values`, `enumerations`, `unions`, `interfaces`, `module-types` | ✅ | ✅ | ✅ | ✅ |
+
+¹ In OA, use `operational-processes` or `capcli chain list oa`, because
+`functional-chains` comes back empty.
+
+Requirements are best found with `capcli list <layer> requirements`.
+`search --type Requirement` doesn't find them.
+
+### Creating and modifying
+
+| Element or relation | Create | Modify | Delete | Notes |
+|---|:-:|:-:|:-:|---|
+| Functions (activities in OA) | ✅ | ✅ | ✅ | All four layers. Created below a parent function, with the right metaclass for the layer |
+| Components (entities in OA), actors | ✅ | ✅ | ✅ | `--actor`. `--nature node\|behavior` in PA. The Part that Capella needs is created automatically |
+| Functional exchanges | ✅ | ✅ | ✅ | Ports are created automatically. In OA, activities are connected directly |
+| Component exchanges (communication means in OA) | ✅ | ✅ | ✅ | `--kind flow\|delegation\|assembly`. Component ports are created automatically |
+| Function → component allocation | ✅ | ✅ | ✅ | `allocate`, `unallocate`, `allocate --move` |
+| Functional exchange → component exchange allocation | ✅ | | ✅ | `allocate`, `unallocate` |
+| Realization (function, component or chain → the layer above) | ✅ | | 🟡 | `realize`. There is no `unrealize`: delete the realization link instead (`show <uuid> --attr function_realizations`, then `delete <link uuid>`) |
+| Functional chains / operational processes | ✅ | ✅ | ✅ | `chain create / add / remove`, with `--path` |
+| Chain involved in a capability | ✅ | | 🟡 | `chain involve`. To undo, delete the involvement (`show <capability> --attr chain_involvements`) |
+| Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
+| Existing requirement text | | ✅ | | `set <req> text="<p>…</p>"` |
+| Existing property values (PVMT) | | ✅ | | `set <property value> value=…` |
+| Any element inside a layer | | | ✅ | `delete` refuses while the element is still referenced. `--cascade` also removes the exchanges, allocations, realizations, involvements, Parts and orphaned ports that depend on it. Packages and layer roots are never deleted |
+| Several changes at once | ✅ | ✅ | ✅ | `batch`: all or nothing, and later steps can refer to elements created earlier (`"as"` / `"$name"`) |
+
+### Not possible today
+
+These elements can all be **read** with `search`, `show` and `show --attr`.
+Changing them needs Capella, or a reviewed capellambse script.
+
+| Area | What is missing |
+|---|---|
+| Structure | Creating packages. Moving an element to another parent. Reordering elements |
+| Capabilities and missions | Creating capabilities, missions or capability exploitations. Involving functions, components or actors in a capability. Only chain involvement is supported |
+| Scenarios | Scenarios, instance roles, sequence messages, fragments |
+| Modes and states | State machines, regions, states, modes, transitions. "Available in states" on functions and chains |
+| Data model | Classes, properties, data types, enumerations, unions, collections, exchange items. Assigning exchange items to exchanges, ports or chain links. Existing items' simple attributes can still be changed with `set` |
+| Interfaces and ports | Interfaces, interface allocation and implementation. Creating or allocating ports on their own: ports only come into being with an exchange |
+| Physical architecture | Physical links, physical paths, physical ports, deploying behaviour components on node components |
+| Functional chains | Control nodes and sequence links of complex chains (AND/OR/ITERATE). They are kept but not editable, and `chain show` leaves them out. Exchange contexts and exchanged items on chain links |
+| Requirements | Creating requirements, or linking them to model elements. Existing text and attributes can be changed with `set` |
+| Property values (PVMT) | Creating property values or groups, or applying them to elements. Existing values can be changed with `set` |
+| Constraints | Constraints, preconditions and postconditions on capabilities and chains |
+| Status | `status` and `progress_status` can't be set |
+| Diagrams | Creating diagrams, or adding new elements to them: new elements exist in the model but aren't drawn. Deleted elements stay on diagrams until you clean them up in Capella (`delete` warns you). `diagrams render` shows the layout as saved |
+
+### Other limits
+
+- **Capella must be closed while capcli writes.** Otherwise Capella overwrites
+  the changes, or the two versions conflict. There is no locking.
+- **Tested on Capella 7.0 only**, with capellambse 0.8.x. Other versions that
+  capellambse supports should work, but check the capellambse docs and test on
+  a copy first.
+- **Library projects** (shared models referenced by other models) haven't been tested.
+- **Use the command line only.** Don't edit the model's XML directly.
+  `capcli check` finds broken references, but can't repair them.
 
 ## Development
 

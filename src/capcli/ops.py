@@ -247,7 +247,10 @@ def set_attrs(model, element: str, values: dict[str, str]):
         elif isinstance(current, float):
             value = float(raw)
         elif hasattr(current, "name") and hasattr(current, "value"):  # enum
+            allowed = [m.name for m in type(current)]
             value = raw.upper()
+            if value not in allowed:
+                raise CapError(f"{key!r} must be one of {', '.join(allowed)}")
         elif current is not None and not isinstance(current, _SETTABLE_SCALARS):
             # Markup (description) and other str-likes are fine; refuse the rest.
             if not isinstance(current, str):
