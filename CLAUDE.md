@@ -177,8 +177,7 @@ lxml tree directly (`obj._element`, `model._loader`):
   `_DETACHABLE_TYPED`) are *detached* under `--cascade`: the ID is removed from the
   list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state caches
   `involvedStates` / `referencedStates`) are updated even without
-  `--cascade`. Interfaces provided/required by ports (`providedInterfaces`,
-  `requiredInterfaces`) are detachable too. A `PhysicalPathInvolvement` referrer means a link or node
+  `--cascade`. A `PhysicalPathInvolvement` referrer means a link or node
   inside a physical path: with `--cascade` the whole path is deleted (a path
   missing a hop is meaningless), otherwise the path blocks the delete. Any other referrer blocks the delete. Diagram references are
   only reported as a warning.
@@ -217,7 +216,7 @@ Check these again when upgrading capellambse.
 | `DataPkg.enumerations` is a filter, but creating through it works; `ExchangeItemElement.abstract_type` is deprecated | Create enumerations with `data_types.create("Enumeration")`; use `type` |
 | Exchange items: functional exchanges use `exchanged_items`, function ports `exchange_items` (`incoming`/`outgoingExchangeItems` in XML), component exchanges `convoyed_informations` (`allocated_exchange_items` is deprecated); component ports carry interfaces, not items | `data.CARRIER_ATTR` |
 | Regions don't get `involvedStates`, states don't get `referencedStates` or their own sub-region "region" (Capella always has all three) | `modes.sync_caches()` after every state change; `add_state` creates the region; `check --fix` rebuilds caches |
-| A new `Constraint` has no `ownedSpecification`, and `specification[...] = …` raises (it is `None`) | `modes._set_guard` writes the `OpaqueExpression` (`bodies` + `languages`) with `model.add_xml_child` |
+| A new `Constraint` has no `ownedSpecification`, and `specification[...] = …` raises (it is `None`) | `model.set_constraint` writes the `OpaqueExpression` (`bodies` + `languages`) with `model.add_xml_child` |
 | `StateTransition.effects` is deprecated; the accessor is `effect` (a list) | Use `effect` |
 | Deployment: capellambse also offers `InstanceDeploymentLink`, but Capella uses `PartDeploymentLink`, owned by the host's Part (`location` = host Part, `deployedElement` = deployed Part) | `physical.deploy` |
 | `PhysicalPath.involved_items.append()` writes involvements without the `nextInvolvements` chain that orders them | `physical.create_path` writes it; `_path_hops` reads the order from it |
