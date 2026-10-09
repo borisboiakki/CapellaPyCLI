@@ -1,6 +1,6 @@
 ---
 name: capella-model
-description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities and missions in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
+description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions and progress status in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
 compatibility: Needs the capcli command on PATH (pip install from the CapellaPyCLI repo, Python 3.10+). Works with OpenCode and Claude Code.
 metadata:
   tool: capcli
@@ -133,6 +133,11 @@ capcli capability generalize <cap> <more-general-cap> [--remove]
 capcli realize <la-capability> <sa-capability>    # sa->oa, la->sa, pa->la
 capcli unrealize <element> <realized>         # works for every kind of realization
 
+# Progress status (the project's ProgressStatus values only)
+capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
+capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
+capcli status list [VALUE] [--layer la]       # elements grouped by status
+
 # Missions (SA)
 capcli mission create --name "Get there"
 capcli mission show <mission>
@@ -189,3 +194,4 @@ later steps. The ops and their arguments:
 | `create-mission` | `name`, `description` |
 | `mission-exploit` | `mission`, `capability`, `remove` |
 | `mission-involve` | `mission`, `elements`, `remove` |
+| `set-status` | `value`, `elements` |

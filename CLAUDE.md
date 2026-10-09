@@ -48,6 +48,7 @@ src/capcli/
                    Arcadia structure rules, batch runner and the OPS registry
   chains.py        functional chains / operational processes
   capabilities.py  capabilities (OA/SA/LA/PA) and missions (SA)
+  status.py        progress status (ProgressStatus values)
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -56,6 +57,7 @@ tests/
   test_cli.py      core commands, and functional chains (at the end)
   test_capabilities.py  capabilities, missions, realization sources
   test_structure.py     Arcadia structure rules
+  test_status.py        progress status
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -68,12 +70,14 @@ tests/
 model.py          ← imports only capellambse
 chains.py         ← imports model
 capabilities.py   ← imports model
-ops.py            ← imports model, chains, capabilities (merges their OPS)
+status.py         ← imports model
+ops.py            ← imports model, chains, capabilities, status (merges their OPS)
 cli.py            ← imports everything
 ```
 
-`model.py` depends on nothing in the package. `chains.py` and
-`capabilities.py` import only from `model.py`. `ops.py` imports both and
+`model.py` depends on nothing in the package. The feature modules
+(`chains.py`, `capabilities.py`, `status.py`) import only from `model.py`.
+Helpers they share, such as `status_name` / `with_status`, live in `model.py`. `ops.py` imports both and
 merges their `OPS` dicts into its registry. Keep it that way: a feature
 module importing `ops` creates an import cycle (this happened once, and is
 why the shared helpers live in `model.py`).
@@ -126,6 +130,9 @@ A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
   `outgoing_exchanges`, `chains`, `diagrams`. `show --attr X` returns any
   attribute. `uuid` / `type` / `layer` come back as `attr_uuid` and so on, so
   they don't clobber the identity keys.
+- `status` appears in every show view when the element has one: `detail`,
+  `show_chain`, `show_capability` and `show_mission` all use
+  `model.with_status`. Add it to any new show view.
 - `show` delegates to `chains.show_chain`, `capabilities.show_capability` or
   `show_mission` for those kinds. These return an `issues` list (strings)
   that agents are told to keep empty.
@@ -169,7 +176,8 @@ Check these again when upgrading capellambse.
 | OA activities have no ports; exchanges connect activities directly. OA entity links are `CommunicationMean` | Handled in `create_function_exchange` / `create_component_exchange` |
 | Requirements have no `name` attribute (they use `ReqIFLongName`) | `search` falls back to the `name` accessor |
 | `InterfaceAllocation` is marked abstract, so interface allocation fails | Not supported yet (needs raw XML, or an upstream fix) |
-| `progress_status` has no setter; `status` needs an `EnumerationPropertyLiteral` | `set` refuses both today |
+| `status` accepts *any* `EnumerationPropertyLiteral`, including PVMT values; `status = None` raises | `status.py` only accepts literals of the project's `ProgressStatus` type, and clears with `del obj.status` |
+| `progress_status` has no setter, but it is only the name of the `status` literal | Setting `status` sets it. `set progress_status=…` is treated as `status` |
 | `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
@@ -307,7 +315,7 @@ computed and read-only. A `Backref` is read-only.
 capellambse can already write all of the following (each was probed: save,
 reload, `check` ok). Only capcli commands are missing. Roughly in order:
 
-1. **`status`**: set from the project's `EnumerationPropertyLiteral`s (e.g. `DRAFT`).
+1. ~~`status`~~: done (`capcli status`).
 2. **Requirements**: create in a `CapellaModule`, and link or unlink to
    elements. In a probe, `r.relations.create("CapellaOutgoingRelation", target=fn)`
    linked the requirement to the function (it appeared in `fn.requirements`),
@@ -331,5 +339,4 @@ reload, `check` ok). Only capcli commands are missing. Roughly in order:
 
 Capability pre- and postconditions (constraints) are also missing.
 
-Out of reach with capellambse: creating or laying out diagrams, and
-`progress_status`.
+Out of reach with capellambse: creating or laying out diagrams.

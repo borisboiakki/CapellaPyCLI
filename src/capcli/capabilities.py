@@ -28,6 +28,7 @@ from .model import (
     resolve,
     same_layer,
     type_name,
+    with_status,
 )
 
 CAPABILITY_TYPE = {
@@ -193,7 +194,7 @@ def relate(model, relation: str, capability: str, other: str, remove: bool = Fal
 def show_capability(model, capability: str) -> dict[str, Any]:
     cap = _capability(model, capability)
     key = require_layer(cap)
-    d: dict[str, Any] = {**brief(cap), "layer": key, "parent": brief(cap.parent)}
+    d: dict[str, Any] = with_status({**brief(cap), "layer": key, "parent": brief(cap.parent)}, cap)
     for plain in ("description", "summary"):
         if getattr(cap, plain, None):
             d[plain] = str(getattr(cap, plain))
@@ -298,12 +299,12 @@ def mission_involve(model, mission: str, elements: list[str], remove: bool = Fal
 
 def show_mission(model, mission: str):
     mi = _mission(model, mission)
-    return {
+    return with_status({
         **brief(mi),
         "layer": "sa",
         "exploits": [brief(x.capability) for x in mi.capability_exploitations],
         "involves": [brief(i.involved) for i in mi.involvements],
-    }
+    }, mi)
 
 
 OPS = {

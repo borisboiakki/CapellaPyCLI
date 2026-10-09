@@ -20,6 +20,7 @@ capcli handles them for you:
 | capellambse accepts sub-systems in SA and actors inside the system, both against Arcadia | `create component` refuses them, and `check` reports existing ones under `structure` |
 | capellambse can't edit chains through `involved_*`, and `capability.involved_chains.append()` rejects chains | `chain` commands create the involvements directly and keep links and functions consistent |
 | Realizations written with only `targetElement` (Capella always writes `sourceElement` too) | `realize` writes both ends. `check` reports incomplete links and `check --fix` repairs them |
+| `status` accepts any enumeration literal (even PVMT values), and `status = None` raises | `status` only accepts the project's ProgressStatus values, and `NOT_SET` clears it |
 | Partial writes after an error | `batch` applies a list of steps all-or-nothing |
 | Hard to tell if the model is still sound | `check` (reference integrity) and `validate` (capellambse rules), plus an `issues` list in `chain show` and `capability show` |
 
@@ -77,6 +78,7 @@ write:   create function|component|function-exchange|component-exchange
 chains:  chain list|show|create|add|remove|involve
 capab.:  capability list|show|create|involve|uninvolve|include|extend|generalize
          mission create|show|exploit|involve · realize · unrealize
+status:  status values|set|list
 verify:  check · validate
 global:  --model PATH (or $CAPELLA_MODEL) · --dry-run
 ```
@@ -113,6 +115,7 @@ the kinds capcli can't create or modify.
 | Functional chains | `capcli chain list / show` | Ordered steps, entry and exit functions, and integrity issues |
 | Diagrams | `capcli diagrams list / render` | Lists diagrams (name, type, target) and renders one to SVG, as saved in the `.aird` |
 | Capabilities and missions | `capcli capability list / show`, `capcli mission show` | Involved components, actors or entities, functions and chains; realizations up and down; include, extend and generalize relations in both directions; exploiting missions (SA); scenarios; and an `issues` list |
+| Progress status | `capcli status values / list`, and `show` | The project's status values, elements grouped by status, and each element's status in `show` |
 | Model health | `capcli check`, `capcli validate` | Arcadia structure violations, broken, empty or incomplete references (`check --fix` repairs missing realization sources), and capellambse's validation rules |
 
 Kinds available in `capcli list <layer> <kind>`:
@@ -151,6 +154,7 @@ Kinds available in `capcli list <layer> <kind>`:
 | Capability include / extend / generalize | ✅ | | ✅ | `capability include`, `extend` or `generalize`, each with `--remove` |
 | Missions (SA): exploited capabilities, involved actors | ✅ | | ✅ | `mission create`, `mission exploit`, `mission involve` (`--remove` to undo) |
 | Text and simple attributes of any element | | ✅ | | `set`: name, description, summary, review, sid, booleans, numbers, and enumerations such as function `kind`, PA `nature` or exchange item `type`. A wrong enumeration value is rejected with the list of allowed values |
+| Progress status (DRAFT, TO_BE_REVIEWED, …) of any element | | ✅ | ✅ | `status set VALUE <uuid>...` or `set <uuid> status=VALUE`. Only the project's ProgressStatus values are accepted. `NOT_SET` clears |
 | Existing requirement text | | ✅ | | `set <req> text="<p>…</p>"` |
 | Existing property values (PVMT) | | ✅ | | `set <property value> value=…` |
 | Any element inside a layer | | | ✅ | `delete` refuses while the element is still referenced. `--cascade` also removes the exchanges, allocations, realizations, involvements, Parts and orphaned ports that depend on it. Packages and layer roots are never deleted |
@@ -174,7 +178,6 @@ Changing them needs Capella, or a reviewed capellambse script.
 | Requirements | Creating requirements, or linking them to model elements. Existing text and attributes can be changed with `set` |
 | Property values (PVMT) | Creating property values or groups, or applying them to elements. Existing values can be changed with `set` |
 | Constraints | Constraints, preconditions and postconditions on capabilities and chains |
-| Status | `status` and `progress_status` can't be set |
 | Diagrams | Creating diagrams, or adding new elements to them: new elements exist in the model but aren't drawn. Deleted elements stay on diagrams until you clean them up in Capella (`delete` warns you). `diagrams render` shows the layout as saved |
 
 ### Other limits
