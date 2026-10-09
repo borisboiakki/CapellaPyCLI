@@ -190,6 +190,9 @@ Changing them needs Capella, or a reviewed capellambse script.
 
 ## Development
 
+See [`CLAUDE.md`](CLAUDE.md) for the architecture, the capellambse traps
+capcli works around, the rules to keep, and a checklist for adding features.
+
 ```bash
 python -m venv .venv && .venv/bin/pip install -e '.[test]'
 .venv/bin/pytest

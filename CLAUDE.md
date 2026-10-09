@@ -1,0 +1,335 @@
+# CLAUDE.md: working on capcli
+
+This file is for people and agents who **develop capcli**. It is not for
+agents that *use* capcli on a model: those read `templates/AGENTS.md` or the
+skill in `templates/skills/capella-model/`, which get copied into the model's
+repository. Keep the two audiences apart.
+
+## What capcli is
+
+capcli is a command line for reading and editing [Capella](https://mbse-capella.org/)
+models (`.aird` / `.capella` / `.afm` files), built on
+[py-capellambse](https://github.com/DSD-DBS/py-capellambse) 0.8.x. Its users
+are coding agents (Claude Code, OpenCode, …) that work through a shell, so:
+
+- every command prints **one JSON document** on stdout;
+- writes are guarded: explicit metaclasses, reference checks, Arcadia rules,
+  `--dry-run`, and atomic `batch`;
+- Capella doesn't need to be running. In fact it must be **closed** while
+  capcli writes.
+
+The model files are XMI: elements are linked by UUID references (`#uuid`
+attributes). A naive edit leaves dangling or half-written links that Capella
+then rejects or shows wrongly. capcli's whole value is producing XML that
+matches what Capella itself writes.
+
+## Quick start
+
+```bash
+python -m venv .venv && .venv/bin/pip install -e '.[test]'
+.venv/bin/pytest -q                       # ~1 min, all tests must pass
+.venv/bin/pip install pyflakes && .venv/bin/python -m pyflakes src tests  # no linter config; keep it clean
+.venv/bin/capcli -m tests/data/model info # try it on the test model
+```
+
+Never run a write command against `tests/data/model` directly, because it is
+the test fixture. Copy it first:
+`cp -r tests/data/model /tmp/m && capcli -m /tmp/m …`.
+
+## Repository layout
+
+```text
+src/capcli/
+  cli.py           click commands, JSON output, error handling, --dry-run, batch entry
+  model.py         loading, element lookup/shortcuts, layer + metaclass maps,
+                   JSON serialization (brief/detail), shared predicates
+  ops.py           core write operations (create/allocate/realize/set/delete),
+                   XML-level helpers (iter_refs, delete cascade, check),
+                   Arcadia structure rules, batch runner and the OPS registry
+  chains.py        functional chains / operational processes
+  capabilities.py  capabilities (OA/SA/LA/PA) and missions (SA)
+templates/
+  AGENTS.md                         agent instructions for a *model* repository
+  skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
+tests/
+  conftest.py      `model` (fresh copy of the test model) and `run` fixtures
+  test_cli.py      core commands, and functional chains (at the end)
+  test_capabilities.py  capabilities, missions, realization sources
+  test_structure.py     Arcadia structure rules
+  test_docs.py     keeps the templates in sync with the CLI (see below)
+  data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
+```
+
+## Architecture
+
+### Dependency direction
+
+```text
+model.py          ← imports only capellambse
+chains.py         ← imports model
+capabilities.py   ← imports model
+ops.py            ← imports model, chains, capabilities (merges their OPS)
+cli.py            ← imports everything
+```
+
+`model.py` depends on nothing in the package. `chains.py` and
+`capabilities.py` import only from `model.py`. `ops.py` imports both and
+merges their `OPS` dicts into its registry. Keep it that way: a feature
+module importing `ops` creates an import cycle (this happened once, and is
+why the shared helpers live in `model.py`).
+
+### Request flow
+
+1. `cli()` builds a `Ctx` holding the model path (`--model`, then
+   `$CAPELLA_MODEL`, then the only `.aird` under the current directory) and the
+   `--dry-run` flag. The model is loaded lazily on first access.
+2. A **read** command (`@click.pass_obj` + `@handled`) resolves elements and
+   calls `emit()`.
+3. A **write** command uses `@write_command`. The function gets the loaded
+   model plus the CLI arguments, calls an operation, and returns a dict.
+   The decorator then saves the model (unless `--dry-run`) and emits
+   `{...result, "saved": bool}`.
+4. Errors: operations raise `CapError("actionable message")`. `@handled` turns
+   it, or any unexpected exception, into `{"error": "..."}` with exit code 1.
+   Nothing is saved after an error.
+
+Exit codes: **0** ok, **1** error, **2** `check` found problems.
+
+### Operations and batch
+
+Every write is a plain function `op(model, **kwargs) -> dict`. It mutates the
+in-memory model and **never saves**. It is registered under a kebab-case name
+in an `OPS` dict (`ops.OPS`, `chains.OPS`, `capabilities.OPS`).
+
+`capcli batch` (`ops.run_batch`) runs a JSON list of steps against one loaded
+model and saves only if every step succeeds, so it is all-or-nothing.
+`"as": "x"` stores the UUID from a step's `result["created"]`, and `"$x"` in
+later steps (also inside lists and dicts) is replaced with it. Batch arguments
+are the op's keyword names, with `-` normalized to `_`. There are a few
+explicit aliases in `run_batch`: `from` → `from_`, and `layer` → `layer_name`
+for `create-chain` / `create-capability`.
+
+A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
+
+### Element references
+
+`model.resolve()` accepts a UUID or a shortcut:
+`<layer>:root-function` (`oa:root-activity`), `<layer>:root-component`
+(`oa:root-entity`, which is the OA entity *package*), and `<layer>:structure`
+(the Structure package, where actors live).
+
+### JSON shapes (keep them stable, because agents parse them)
+
+- `brief(obj)` → `{"uuid", "type" (metaclass), "name"}`. It is used everywhere.
+- `detail(obj)` (`show`) adds `layer`, description, and the relations in
+  `SHOW_ATTRS`, plus computed keys: `allocated_to`, `incoming_exchanges`,
+  `outgoing_exchanges`, `chains`, `diagrams`. `show --attr X` returns any
+  attribute. `uuid` / `type` / `layer` come back as `attr_uuid` and so on, so
+  they don't clobber the identity keys.
+- `show` delegates to `chains.show_chain`, `capabilities.show_capability` or
+  `show_mission` for those kinds. These return an `issues` list (strings)
+  that agents are told to keep empty.
+
+### Low-level XML work (ops.py)
+
+capellambse's high-level API is used for creating things. Some jobs go to the
+lxml tree directly (`obj._element`, `model._loader`):
+
+- `iter_refs(model)`: every `#id` reference in semantic files (or visual ones,
+  with `visual=True`).
+- `delete`: computes everything that references the element's subtree.
+  Without `--cascade`, it refuses. With `--cascade`, it removes referrers whose
+  metaclass matches `_CASCADABLE` (exchanges, allocations, realizations,
+  involvements, Parts, ports, include/extend/generalization/exploitation),
+  repeated until nothing new is found. Ports left without exchanges are
+  removed too. Any other referrer blocks the delete. Diagram references are
+  only reported as a warning.
+- Removing an element: `model._loader.idcache_remove(el)` and then
+  `el.getparent().remove(el)`. Always do both.
+- `check`: dangling refs, empty required refs, realization links without
+  `sourceElement` (`--fix` fills them in), and Arcadia structure violations.
+
+## capellambse 0.8.1 traps (all found the hard way)
+
+Check these again when upgrading capellambse.
+
+| Trap | What capcli does |
+|---|---|
+| `create()` infers the wrong metaclass, e.g. a `LogicalFunction` below an `OperationalActivity` | Always pass the metaclass: `FUNCTION_TYPE`, `COMPONENT_TYPE`, `CAPABILITY_TYPE` per layer |
+| Realization links get only `targetElement`; Capella always writes `sourceElement` too | `ops._complete_trace_sources()` after every realize; `check --fix` repairs old links |
+| Removing via capellambse can leave `target=""` or dangling links | `delete` works on the XML with a reference scan (see above) |
+| `PhysicalComponent.components` is computed (owned + deployed); `create` fails ("List is not coupled") | Use `owned_components` in PA |
+| `capability.involved_chains.append(chain)` rejects chains (it expects functions) | Create `FunctionalChainAbstractCapabilityInvolvement` directly |
+| PA `CapabilityRealization.involved_components` reads back empty | Read `capability_realization_involvements[*].involved` |
+| `included_by` / `extended_by` / `generalized_by` return the *link* objects | Use `link.parent` to get the capability |
+| `FunctionalChain.involved_*` are read-only properties | Create `FunctionalChainInvolvementFunction` / `…Link` directly |
+| `sa.mission_pkg` is a list | Use `[0]` |
+| OA: `functional-chains` is empty; processes are `all_operational_processes` | `chains.all_chains()` |
+| OA `root_entity` is deprecated; entities belong in `entity_pkg` | `oa:root-entity` resolves to `entity_pkg` |
+| OA activities have no ports; exchanges connect activities directly. OA entity links are `CommunicationMean` | Handled in `create_function_exchange` / `create_component_exchange` |
+| Requirements have no `name` attribute (they use `ReqIFLongName`) | `search` falls back to the `name` accessor |
+| `InterfaceAllocation` is marked abstract, so interface allocation fails | Not supported yet (needs raw XML, or an upstream fix) |
+| `progress_status` has no setter; `status` needs an `EnumerationPropertyLiteral` | `set` refuses both today |
+| `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
+| capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
+| capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
+
+## Invariants: don't break these
+
+1. **Explicit metaclasses** on every create.
+2. **Same layer** for exchanges, allocations, involvements and relations
+   (`model.same_layer`). Cross-layer links are only realizations, from a layer
+   to the one directly above (`oa ← sa ← la ← pa`).
+3. **Arcadia structure** (`ops._check_structure_rules`,
+   `ops.structure_violations`):
+   - SA is a black box: the System is the only non-actor SA component;
+   - actors (SA/LA/PA) live in the Structure package, never inside a component;
+   - `is_actor` can't be toggled with `set`.
+4. **Every realization has both ends** (`targetElement` and `sourceElement`).
+5. **delete never leaves a dangling reference.** `capcli check` must stay
+   `ok` after every write in every test.
+6. **Ops never save.** Only `write_command`, `batch` and `check --fix` save,
+   and never after an error.
+7. **Errors say what to do instead**: the command, the shortcut, the
+   allowed values.
+8. **JSON keys are an API.** Add keys, but don't rename or remove them.
+
+## How to add a feature (checklist)
+
+1. **Probe capellambse first**, on a copy of the test model. Write a scratch
+   script (pattern below) that creates the elements, saves, reloads and runs
+   `capcli check`.
+2. **Compare with Capella's XML.** Find a Capella-written example of the same
+   construct in `tests/data/model/*.capella` (`grep -n ':MetaclassName"'`) and
+   diff the attributes capellambse wrote against it. Missing attributes, like
+   `sourceElement`, are bugs to compensate for.
+3. **Implement the op** in the right module: `ops.py` for core elements, or a
+   new module importing only `model.py`. Use `resolve`, `same_layer`, explicit
+   metaclasses and idempotent behaviour (`{"unchanged": True, "reason": …}`
+   when nothing to do). Add `--remove` or an inverse command for every link
+   you can create.
+4. **Register it** in the module's `OPS`, and in `ops.py` if it's a new
+   module. Add batch argument aliases in `run_batch` only if unavoidable.
+5. **Add the CLI command** with `@write_command`, or `@click.pass_obj` +
+   `@handled` for reads. Put it in a click group when there are several
+   related commands.
+6. **Make it visible**: `show` / `detail` / a dedicated `show_*` with an
+   `issues` list for anything with consistency rules.
+7. **Delete and check**: if the new link elements reference other elements,
+   make sure `_CASCADABLE` covers them (otherwise deleting the target is
+   blocked) and that `check` stays `ok`.
+8. **Tests**: one test module per feature, using the `run` fixture. Cover
+   create, read back after reload, idempotence, error paths, the
+   cross-layer/structure rules, delete with and without `--cascade`, and
+   `check` ok at the end. Compare written XML with lxml when the shape
+   matters (see `test_capabilities.py`).
+9. **Docs** (`test_docs.py` fails until you do):
+   - every command and batch op must appear in **both**
+     `templates/AGENTS.md` and `templates/skills/capella-model/SKILL.md`;
+   - the batch examples in both are executed by the tests;
+   - update the README tables: "Reading", "Creating and modifying",
+     "Not possible today", and the trap table at the top.
+10. **Run** `pytest -q` and `pyflakes src tests`. Before a PR, run one batch
+    end to end on a scratch copy and inspect `git diff` of the `.capella` file.
+
+Probe script pattern:
+
+```python
+import capellambse, warnings, sys
+warnings.simplefilter("ignore")
+m = capellambse.MelodyModel(sys.argv[1])          # path to a *copy* of the .aird
+x = m.la.root_function.functions.create("LogicalFunction", name="probe")
+print(type(type(x).functions).__name__)          # Containment / Allocation / property / Backref
+m.save()
+print(capellambse.MelodyModel(sys.argv[1]).by_uuid(x.uuid).name)
+```
+
+The descriptor type tells you what you can do with an attribute.
+`Containment` supports `.create(...)`. `Allocation` supports
+`.append(obj)`, which creates a link element. A plain `property` is
+computed and read-only. A `Backref` is read-only.
+
+## Testing notes
+
+- `conftest.py`: `model` copies `tests/data/model` into `tmp_path`.
+  `run(*args, input=None, ok=True)` invokes the CLI on it and returns the
+  parsed JSON, or `(json, exit_code)` with `ok=False`.
+- Every `run` call reloads the model from disk, so assertions after a write
+  also prove the change survived a save and reload.
+- Useful test-model facts:
+  - SA "Capability" = `9390b7d5-…` (it includes itself, which is test data, not a bug);
+  - SA System = `230c4621-…`;
+  - OA "Stay alive" = `83d1334f-…`;
+  - LA root component "Hogwarts" = `0d2edb8f-…`;
+  - SA "Test Chain" = `dfc4341d-…`;
+  - 8 requirements, some unnamed.
+- When you add a guard test, check that it actually fails: temporarily break
+  the doc or code and watch the test go red.
+- Nothing has been opened in Capella by the tests. The XML comparison in
+  step 2 above is the only check against Capella's real behaviour. When
+  possible, open a sample result in Capella before releasing a feature.
+
+## Conventions
+
+- Python ≥ 3.10, `from __future__ import annotations`, type hints on public
+  functions, short docstrings that explain *why*. Match the style of the
+  surrounding code.
+- Element arguments are named after their role (`element`, `to`, `parent`,
+  `capability`, `chain`, …). Lists of elements are `elements`.
+- Comments explain capellambse or Capella quirks, with what goes wrong
+  otherwise.
+- Git:
+  - work on a branch and open a PR to `main`;
+  - PRs are merged with a merge commit;
+  - the repository has no CI, so run the tests locally before pushing;
+  - don't put AI model names in commits, PRs or code.
+
+## Known technical debt
+
+- `CHAIN_TYPES` is defined three times (`chains`, `capabilities`, `ops`), and
+  `_remove(model, link)` twice (`chains`, `capabilities`). Both belong in
+  `model.py`.
+- `ops.py` mixes core ops and XML utilities. `iter_refs` / `delete` / `check`
+  could move to their own `integrity.py`.
+- `delete` and `check` scan the whole model on every call, which is fine for
+  the test model. Watch performance on large models (thousands of elements).
+- Each CLI call reloads the model, which takes a few seconds on big models.
+  `batch` is the workaround. A long-running server mode could be added later.
+- `capability list` computes the full `show` for every capability to count
+  issues.
+- The relation batch ops (`capability-include` etc.) are lambdas in
+  `capabilities.OPS`.
+- Only Capella 7.0 is tested. Library projects (REC/RPL, referenced
+  libraries) are untested.
+
+## Roadmap (agreed priorities)
+
+capellambse can already write all of the following (each was probed: save,
+reload, `check` ok). Only capcli commands are missing. Roughly in order:
+
+1. **`status`**: set from the project's `EnumerationPropertyLiteral`s (e.g. `DRAFT`).
+2. **Requirements**: create in a `CapellaModule`, and link or unlink to
+   elements. In a probe, `r.relations.create("CapellaOutgoingRelation", target=fn)`
+   linked the requirement to the function (it appeared in `fn.requirements`),
+   but capellambse wrote a `CapellaIncomingRelation`. Check the
+   direction against Capella-written relations before relying on it.
+3. **Data model and exchange items**: classes, properties, enumerations,
+   exchange items and their elements. Assign them to functional exchanges and
+   ports (`exchanged_items`, `exchange_items`).
+4. **Modes and states**: state machines, regions, states and modes,
+   transitions, and `available_in_states`.
+5. **Physical architecture**: physical ports and links, deployment (an
+   `InstanceDeploymentLink` from the node's *Part* to the behaviour
+   component's *Part*), physical paths (untested).
+6. **Scenarios** and **complex chains** (sequence nodes and links,
+   exchange context, exchanged items). These are the hardest to get valid for
+   Capella, because messages and nodes have ordering rules.
+7. **Interface allocation**: raw XML, because capellambse marks
+   `InterfaceAllocation` abstract.
+8. **Structure**: packages, moving an element to another parent, and a
+   repair command for models that break the structure rules.
+
+Capability pre- and postconditions (constraints) are also missing.
+
+Out of reach with capellambse: creating or laying out diagrams, and
+`progress_status`.
