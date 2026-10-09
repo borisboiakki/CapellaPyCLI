@@ -7,6 +7,7 @@ the caller so several operations can be applied atomically (see ``batch``).
 
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ from . import chains as _chains
 from . import data as _data
 from . import modes as _modes
 from . import physical as _physical
+from . import interfaces as _interfaces
 from . import structure as _structure
 from . import status as _status
 from .model import (
@@ -373,7 +375,8 @@ def set_attrs(model, element: str, values: dict[str, str]):
 # and can therefore be removed together with it (``delete --cascade``).
 _CASCADABLE = re.compile(
     r"(Exchange|CommunicationMean|Allocation|Realization|Involvement\w*|"
-    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition)$"
+    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition|"
+    r"InterfaceImplementation|InterfaceUse)$"
 )
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
 # List-valued references that only say "this exchange/port carries that item".
@@ -384,6 +387,8 @@ _DETACHABLE_ATTRS = {
     # A transition's effects (functions) and triggers (exchanges, items):
     # deleting one of those must not delete the transition.
     "effect", "triggers",
+    # Interfaces provided/required by component ports.
+    "providedInterfaces", "requiredInterfaces",
 }
 # Caches Capella keeps on regions and states (see modes.py): always updated,
 # never a reason to refuse a delete.
@@ -600,16 +605,19 @@ def check(model, fix: bool = False) -> dict[str, Any]:
                     incomplete.append({"uuid": el.get("id"), "type": _xtype(el), "missing": "sourceElement"})
     structure = structure_violations(model)
     caches = _modes.cache_mismatches(model, fix=fix)
+    bad_impl = _interfaces.bad_implementations(model, fix=fix)
     if fix:
-        fixed += len(caches)
-        caches = []
+        fixed += len(caches) + len(bad_impl)
+        caches, bad_impl = [], []
     res: dict[str, Any] = {
-        "ok": not dangling and not empty and not incomplete and not structure and not caches,
+        "ok": not dangling and not empty and not incomplete and not structure and not caches
+        and not bad_impl,
         "dangling": dangling,
         "empty": empty,
         "incomplete": incomplete,
         "structure": structure,
         "state_caches": caches,
+        "interface_implementations": bad_impl,
     }
     if fix:
         res["fixed"] = fixed
@@ -663,9 +671,8 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             kwargs["from_"] = kwargs.pop("from")
         if op == "add-property" and "class" in kwargs:
             kwargs["cls"] = kwargs.pop("class")  # `class` is a Python keyword
-        if op in ("create-chain", "create-capability", "create-class", "create-enumeration",
-                  "create-exchange-item") and "layer" in kwargs:
-            kwargs["layer_name"] = kwargs.pop("layer")
+        if "layer" in kwargs and "layer_name" in inspect.signature(OPS[op]).parameters:
+            kwargs["layer_name"] = kwargs.pop("layer")  # every create op taking a layer
         try:
             res = OPS[op](model, **kwargs)
         except CapError as e:
@@ -687,3 +694,4 @@ OPS.update(_data.OPS)
 OPS.update(_modes.OPS)
 OPS.update(_physical.OPS)
 OPS.update(_structure.OPS)
+OPS.update(_interfaces.OPS)

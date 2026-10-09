@@ -53,6 +53,7 @@ src/capcli/
   modes.py         modes and states: state machines, regions, states, transitions
   physical.py      physical architecture: ports, links, paths, deployment
   structure.py     packages, moving elements, repair structure
+  interfaces.py    interfaces: exchange items, provide/require, allocation
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -66,6 +67,7 @@ tests/
   test_modes.py         modes and states
   test_physical.py      physical architecture
   test_move.py          packages, move, repair structure
+  test_interfaces.py    interfaces
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -83,13 +85,14 @@ data.py           ← imports model
 modes.py          ← imports model
 physical.py       ← imports model
 structure.py      ← imports model
+interfaces.py     ← imports model
 ops.py            ← imports model and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
 `model.py` depends on nothing in the package. The feature modules
 (`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`,
-`physical.py`, `structure.py`) import only
+`physical.py`, `structure.py`, `interfaces.py`) import only
 from `model.py`. Helpers they share, such as `status_name` / `with_status` and
 `add_xml_child` / `datavalue_alias` (creating elements capellambse can't),
 `ancestors` / `common_owner` (where an exchange or link belongs),
@@ -127,8 +130,8 @@ model and saves only if every step succeeds, so it is all-or-nothing.
 later steps (also inside lists and dicts) is replaced with it. Batch arguments
 are the op's keyword names, with `-` normalized to `_`. There are a few
 explicit aliases in `run_batch`: `from` → `from_`, `class` → `cls`
-(`add-property`), and `layer` → `layer_name` for the `create-*` ops that
-take a layer.
+(`add-property`), and `layer` → `layer_name` for any op whose function
+has a `layer_name` parameter.
 
 A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
 
@@ -172,15 +175,17 @@ lxml tree directly (`obj._element`, `model._loader`):
   `triggers`) are *detached* under `--cascade`: the ID is removed from the
   list and the referrer is kept. `_ALWAYS_DETACH_ATTRS` (the state caches
   `involvedStates` / `referencedStates`) are updated even without
-  `--cascade`. A `PhysicalPathInvolvement` referrer means a link or node
+  `--cascade`. Interfaces provided/required by ports (`providedInterfaces`,
+  `requiredInterfaces`) are detachable too. A `PhysicalPathInvolvement` referrer means a link or node
   inside a physical path: with `--cascade` the whole path is deleted (a path
   missing a hop is meaningless), otherwise the path blocks the delete. Any other referrer blocks the delete. Diagram references are
   only reported as a warning.
 - Removing an element: `model._loader.idcache_remove(el)` and then
   `el.getparent().remove(el)`. Always do both.
 - `check`: dangling refs, empty required refs, realization links without
-  `sourceElement`, stale state caches (`--fix` repairs both), and Arcadia
-  structure violations.
+  `sourceElement`, stale state caches, interface implementations written by
+  capellambse with the wrong attribute (`--fix` repairs all three), and
+  Arcadia structure violations.
 
 ## capellambse 0.8.1 traps (all found the hard way)
 
@@ -201,7 +206,8 @@ Check these again when upgrading capellambse.
 | OA `root_entity` is deprecated; entities belong in `entity_pkg` | `oa:root-entity` resolves to `entity_pkg` |
 | OA activities have no ports; exchanges connect activities directly. OA entity links are `CommunicationMean` | Handled in `create_function_exchange` / `create_component_exchange` |
 | Requirements have no `name` attribute (they use `ReqIFLongName`) | `search` falls back to the `name` accessor |
-| `InterfaceAllocation` is marked abstract, so interface allocation fails | Not supported yet (needs raw XML, or an upstream fix) |
+| `InterfaceAllocation` is marked abstract, so `allocated_interfaces.append` fails | `interfaces.allocate_interface` writes it with `add_xml_child` (`ownedInterfaceAllocations`, `targetElement` = interface, `sourceElement` = allocator, as capellambse's own definition says). No Capella-written example in the test model: verify in Capella |
+| `Component.implemented_interfaces` writes `implementedInterfaces` (plural); Capella uses `implementedInterface` and can't read the plural | `interfaces.provide` writes the singular at XML level; `check` reports the plural, `--fix` renames it |
 | `status` accepts *any* `EnumerationPropertyLiteral`, including PVMT values; `status = None` raises | `status.py` only accepts literals of the project's `ProgressStatus` type, and clears with `del obj.status` |
 | `progress_status` has no setter, but it is only the name of the `status` literal | Setting `status` sets it. `set progress_status=…` is treated as `status` |
 | Properties and exchange item elements get no `ownedMinCard`/`ownedMaxCard`, and `min_card = …` raises | `data._set_cards` writes `LiteralNumericValue` children at XML level (`loader.new_uuid` + `idcache_index` *inside* the `with`, or it raises KeyError) |
@@ -378,8 +384,8 @@ reload, `check` ok). Only capcli commands are missing. Roughly in order:
 6. **Scenarios** and **complex chains** (sequence nodes and links,
    exchange context, exchanged items). These are the hardest to get valid for
    Capella, because messages and nodes have ordering rules.
-7. **Interface allocation**: raw XML, because capellambse marks
-   `InterfaceAllocation` abstract.
+7. ~~Interface allocation~~: done (`capcli interface`), together with
+   interface creation, exchange items, provide/require.
 8. ~~Structure~~: done (`capcli package create`, `move`, `repair structure`).
    Still missing: reordering elements, an automatic fix for SA sub-systems.
 

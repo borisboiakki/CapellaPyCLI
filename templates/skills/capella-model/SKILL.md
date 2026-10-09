@@ -1,6 +1,6 @@
 ---
 name: capella-model
-description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status, the data model (classes, enumerations, exchange items) and modes and states, and the physical architecture (links, paths, deployment) in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
+description: Read, query and edit the Capella MBSE model (.aird/.capella files) through the capcli command, covering functions, components, exchanges, allocations, realizations, functional chains, capabilities, missions, progress status, the data model (classes, enumerations, exchange items) and modes and states, the physical architecture (links, paths, deployment) and interfaces in the OA/SA/LA/PA layers. Use for any question about the system model or any change to it, and never edit the model files directly.
 compatibility: Needs the capcli command on PATH (pip install from the CapellaPyCLI repo, Python 3.10+). Works with OpenCode and Claude Code.
 metadata:
   tool: capcli
@@ -178,6 +178,15 @@ capcli package create --parent <la:functions|la:structure|la:capabilities|la:dat
 capcli move <element> <new-parent>            # same layer; Part and exchanges follow
 capcli --dry-run repair structure             # preview, then without --dry-run to apply
 
+# Interfaces
+capcli interface list la
+capcli interface create --layer la --name INav
+capcli interface items <interface> <exchange-item>... [--remove]
+capcli interface provide <component|component-port> <interface> [--remove]
+capcli interface require <component|component-port> <interface> [--remove]
+capcli interface allocate <component|interface> <interface> [--remove]
+capcli interface show <interface>             # items, providers, requirers, allocations, issues
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -257,3 +266,6 @@ later steps. The ops and their arguments:
 | `deploy` | `element`, `host`, `remove` |
 | `create-package` | `parent`, `name` |
 | `move` | `element`, `to` |
+| `create-interface` | `name`, `layer` or `parent`, `description` |
+| `interface-items` | `interface`, `elements`, `remove` |
+| `provide-interface` / `require-interface` / `allocate-interface` | `element`, `interface`, `remove` |

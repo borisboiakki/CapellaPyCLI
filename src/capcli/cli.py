@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, modes, ops, physical, status, structure
+from . import __version__, capabilities, chains, data, interfaces, modes, ops, physical, status, structure
 from .model import (
     LAYERS,
     CapError,
@@ -181,6 +181,9 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
         return
     if capabilities.is_capability(obj) and not attrs:
         emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if type_name(obj) == "Interface" and not attrs:
+        emit(interfaces.show(ctx.model, uuid))
         return
     if physical.is_physical_element(obj) and not attrs:
         emit(physical.show(ctx.model, uuid))
@@ -894,6 +897,80 @@ def pa_path(model, name, links, parent):
 def pa_deploy(model, element, host, remove):
     """Deploy ELEMENT (a behaviour or node component) on HOST."""
     return physical.deploy(model, element, host, remove)
+
+
+@cli.group("interface")
+def interface_group() -> None:
+    """Interfaces: exchange items, provided/required, allocation."""
+
+
+@interface_group.command("list")
+@click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
+@click.pass_obj
+@handled
+def interface_list(ctx: Ctx, layer_name: str) -> None:
+    """List the interfaces of a layer."""
+    emit(interfaces.list_interfaces(ctx.model, layer_name))
+
+
+@interface_group.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def interface_show(ctx: Ctx, uuid: str) -> None:
+    """Show an interface: items, providers, requirers, allocations, issues."""
+    emit(interfaces.show(ctx.model, uuid))
+
+
+@interface_group.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Interface package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def interface_create(model, name, layer_name, parent, description):
+    """Create an interface in an interface package."""
+    return interfaces.create_interface(model, name, layer_name, parent, description)
+
+
+@interface_group.command("items")
+@click.argument("interface")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_items(model, interface, elements, remove):
+    """Add (or --remove) exchange items carried by INTERFACE."""
+    return interfaces.set_items(model, interface, list(elements), remove)
+
+
+@interface_group.command("provide")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_provide(model, element, interface, remove):
+    """ELEMENT (component or component port) provides INTERFACE."""
+    return interfaces.provide(model, element, interface, remove)
+
+
+@interface_group.command("require")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_require(model, element, interface, remove):
+    """ELEMENT (component or component port) requires INTERFACE."""
+    return interfaces.require(model, element, interface, remove)
+
+
+@interface_group.command("allocate")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_allocate(model, element, interface, remove):
+    """Allocate INTERFACE to ELEMENT (a component or another interface)."""
+    return interfaces.allocate_interface(model, element, interface, remove)
 
 
 @cli.group("package")
