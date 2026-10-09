@@ -13,6 +13,7 @@ from typing import Any, Callable
 from capellambse import loader as _loader
 from lxml import etree
 
+from . import chains as _chains
 from .model import (
     COMPONENT_TYPE,
     FUNCTION_TYPE,
@@ -24,38 +25,16 @@ from .model import (
     root_function,
     type_name,
 )
-
-
-def _require_layer(obj) -> str:
-    key = layer_key(obj)
-    if key is None:
-        raise CapError(f"{type_name(obj)} {obj.uuid} is not inside an architecture layer")
-    return key
-
-
-def _is_function(obj) -> bool:
-    return type_name(obj) in FUNCTION_TYPE.values()
-
-
-def _is_component(obj) -> bool:
-    return type_name(obj) in COMPONENT_TYPE.values()
+from .model import is_component as _is_component
+from .model import is_function as _is_function
+from .model import require_layer as _require_layer
+from .model import same_layer as _same_layer
 
 
 def _expect(obj, pred, what: str):
     if not pred(obj):
         raise CapError(f"Expected {what}, got {type_name(obj)} {obj.uuid}")
     return obj
-
-
-def _same_layer(a, b) -> str:
-    ka, kb = _require_layer(a), _require_layer(b)
-    if ka != kb:
-        raise CapError(
-            f"{brief(a)} is in {ka} but {brief(b)} is in {kb}; "
-            "exchanges and allocations must stay within one layer "
-            "(use `realize` for cross-layer traceability)"
-        )
-    return ka
 
 
 def _ancestors(obj):
@@ -211,6 +190,9 @@ def unallocate(model, element: str, from_: str):
     return {"unallocated": brief(elem), "from": brief(target)}
 
 
+_CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
+
+
 def realize(model, element: str, realized: str):
     """Trace ``element`` (lower layer) as realizing ``realized`` (layer above)."""
     elem, up = resolve(model, element), resolve(model, realized)
@@ -218,8 +200,12 @@ def realize(model, element: str, realized: str):
         attr = "realized_functions"
     elif _is_component(elem) and _is_component(up):
         attr = "realized_components"
+    elif type_name(elem) in _CHAIN_TYPES and type_name(up) in _CHAIN_TYPES:
+        attr = "realized_chains"
     else:
-        raise CapError("realize links function->function or component->component")
+        raise CapError(
+            "realize links function->function, component->component or chain->chain"
+        )
     order = ["oa", "sa", "la", "pa"]
     ke, ku = _require_layer(elem), _require_layer(up)
     if order.index(ke) != order.index(ku) + 1:
@@ -489,11 +475,15 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 return aliases[v[1:]]
             if isinstance(v, dict):
                 return {k: sub(x) for k, x in v.items()}
+            if isinstance(v, list):
+                return [sub(x) for x in v]
             return v
 
         kwargs = {k.replace("-", "_"): sub(v) for k, v in step.items()}
         if op == "unallocate" and "from" in kwargs:
             kwargs["from_"] = kwargs.pop("from")
+        if op == "create-chain" and "layer" in kwargs:
+            kwargs["layer_name"] = kwargs.pop("layer")
         try:
             res = OPS[op](model, **kwargs)
         except CapError as e:
@@ -507,3 +497,5 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             aliases[alias] = created["uuid"]
         results.append({"op": op, **({"as": alias} if alias else {}), **res})
     return results
+
+OPS.update(_chains.OPS)

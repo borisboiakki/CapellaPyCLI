@@ -191,6 +191,8 @@ SHOW_ATTRS = (
     "involved_functions",
     "involved_components",
     "deployed_components",
+    "realized_chains",
+    "realizing_chains",
 )
 
 
@@ -223,6 +225,12 @@ def detail(obj, attrs: list[str] | None = None) -> dict[str, Any]:
     if attrs is None and hasattr(obj, "inputs") and hasattr(obj, "outputs"):
         d["incoming_exchanges"] = [_exchange(x) for p in obj.inputs for x in p.exchanges]
         d["outgoing_exchanges"] = [_exchange(x) for p in obj.outputs for x in p.exchanges]
+    if attrs is None and (
+        type_name(obj) in FUNCTION_TYPE.values() or type_name(obj) == "FunctionalExchange"
+    ):
+        from .chains import chains_involving
+
+        d["chains"] = chains_involving(obj._model, obj)
     if attrs is None and hasattr(obj, "visible_on_diagrams"):
         d["diagrams"] = [{"uuid": dg.uuid, "name": dg.name} for dg in obj.visible_on_diagrams]
     return d
@@ -233,6 +241,32 @@ def _exchange(x) -> dict[str, Any]:
     d["from"] = brief(endpoint_owner(x.source))
     d["to"] = brief(endpoint_owner(x.target))
     return d
+
+
+def require_layer(obj) -> str:
+    key = layer_key(obj)
+    if key is None:
+        raise CapError(f"{type_name(obj)} {obj.uuid} is not inside an architecture layer")
+    return key
+
+
+def is_function(obj) -> bool:
+    return type_name(obj) in FUNCTION_TYPE.values()
+
+
+def is_component(obj) -> bool:
+    return type_name(obj) in COMPONENT_TYPE.values()
+
+
+def same_layer(a, b) -> str:
+    ka, kb = require_layer(a), require_layer(b)
+    if ka != kb:
+        raise CapError(
+            f"{brief(a)} is in {ka} but {brief(b)} is in {kb}; "
+            "exchanges and allocations must stay within one layer "
+            "(use `realize` for cross-layer traceability)"
+        )
+    return ka
 
 
 def endpoint_owner(end):

@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, ops
+from . import __version__, chains, ops
 from .model import (
     LAYERS,
     CapError,
@@ -175,7 +175,11 @@ def list_(ctx: Ctx, layer_name: str, kind: str | None, name_filter: str | None, 
 @handled
 def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
     """Show an element with its main relations (or selected attributes)."""
-    emit(detail(resolve(ctx.model, uuid), list(attrs) or None))
+    obj = resolve(ctx.model, uuid)
+    if chains.is_chain(obj) and not attrs:
+        emit(chains.show_chain(ctx.model, uuid))
+        return
+    emit(detail(obj, list(attrs) or None))
 
 
 @cli.command()
@@ -404,7 +408,10 @@ def unallocate(model, element, from_):
 @click.argument("realized")
 @write_command
 def realize(model, element, realized):
-    """Trace ELEMENT as realizing REALIZED in the layer above (e.g. LA fn -> SA fn)."""
+    """Trace ELEMENT as realizing REALIZED in the layer above.
+
+    Works for functions, components and functional chains (e.g. LA fn -> SA fn).
+    """
     return ops.realize(model, element, realized)
 
 
@@ -430,6 +437,84 @@ def set_(model, uuid, assignments):
 def delete(model, uuid, cascade):
     """Delete an element; refuses if anything still references it."""
     return ops.delete(model, uuid, cascade)
+
+
+@cli.group()
+def chain() -> None:
+    """Functional chains (operational processes in OA)."""
+
+
+@chain.command("list")
+@click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
+@click.option("--involving", help="Only chains involving this function/exchange UUID.")
+@click.pass_obj
+@handled
+def chain_list(ctx: Ctx, layer_name: str, involving: str | None) -> None:
+    """List the chains of a layer."""
+    m = ctx.model
+    items = chains.all_chains(m, layer_name)
+    if involving:
+        target = resolve(m, involving)
+        items = [c for c in items if target in c.involved]
+    emit({"count": len(items), "items": [{**brief(c), "issues": len(chains._summary(c)["issues"])} for c in items]})
+
+
+@chain.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def chain_show(ctx: Ctx, uuid: str) -> None:
+    """Show a chain as ordered steps, with entry/exit functions and issues."""
+    emit(chains.show_chain(ctx.model, uuid))
+
+
+@chain.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS), help="Own the chain by the layer's root function.")
+@click.option("--parent", help="Function that owns the chain (instead of --layer).")
+@click.option("--path", "path", multiple=True, help="Function UUIDs in order (repeat); consecutive ones are linked by the exchange between them.")
+@click.option("--add", "elements", multiple=True, help="Extra function/exchange UUIDs to involve (repeat).")
+@click.option("--kind", type=click.Choice(["simple", "composite", "fragment"], case_sensitive=False))
+@click.option("--description")
+@write_command
+def chain_create(model, name, layer_name, parent, path, elements, kind, description):
+    """Create a functional chain, e.g. along a path of functions.
+
+    \b
+    capcli chain create --layer la --name "Navigate" \\
+        --path <acquire-fn> --path <compute-fn> --path <display-fn>
+    """
+    return chains.create_chain(model, name, parent, layer_name, list(path), list(elements), kind, description)
+
+
+@chain.command("add")
+@click.argument("chain_uuid", metavar="CHAIN")
+@click.argument("elements", nargs=-1, required=True)
+@write_command
+def chain_add(model, chain_uuid, elements):
+    """Involve functional exchanges (with both their functions) or functions."""
+    return chains.add_to_chain(model, chain_uuid, list(elements))
+
+
+@chain.command("remove")
+@click.argument("chain_uuid", metavar="CHAIN")
+@click.argument("elements", nargs=-1, required=True)
+@write_command
+def chain_remove(model, chain_uuid, elements):
+    """Take functions (and their links) or exchanges out of a chain.
+
+    The functions and exchanges themselves are not deleted.
+    """
+    return chains.remove_from_chain(model, chain_uuid, list(elements))
+
+
+@chain.command("involve")
+@click.argument("chain_uuid", metavar="CHAIN")
+@click.argument("capability")
+@write_command
+def chain_involve(model, chain_uuid, capability):
+    """Record that CAPABILITY involves the chain."""
+    return chains.involve_chain(model, chain_uuid, capability)
 
 
 @cli.command()
