@@ -174,3 +174,114 @@ def test_diagram_render(run, tmp_path):
 
 def test_validate(run):
     assert "failures" in run("validate", "--layer", "la")
+
+
+# ------------------------------------------------------------ functional chains
+
+SA_CHAIN = "dfc4341d-253a-4ae9-8a30-63a9d9faca39"
+
+
+def _nav_model(run, layer="la"):
+    root = "oa:root-activity" if layer == "oa" else f"{layer}:root-function"
+    steps = [
+        {"op": "create-function", "as": n, "parent": root, "name": n}
+        for n in ("acquire", "compute", "display", "log")
+    ] + [
+        {"op": "create-function-exchange", "as": x, "source": f"${s}", "target": f"${t}", "name": x}
+        for x, s, t in (("pos", "acquire", "compute"), ("route", "compute", "display"), ("trace", "compute", "log"))
+    ]
+    res = run("batch", input=json.dumps(steps))
+    return {s["as"]: s["created"]["uuid"] for s in res["steps"]}
+
+
+def test_chain_read_existing(run):
+    items = run("chain", "list", "sa")["items"]
+    assert [i["uuid"] for i in items] == [SA_CHAIN] and items[0]["issues"] == 0
+    shown = run("show", SA_CHAIN)  # `show` on a chain renders it as a chain
+    assert [s["exchange"]["name"] for s in shown["steps"]] == ["Test fex"]
+    assert shown["entry"][0]["name"] == "Sysexfunc"
+
+
+def test_chain_create_along_path_and_branch(run):
+    ids = _nav_model(run)
+    res = run(
+        "chain", "create", "--layer", "la", "--name", "Navigate",
+        "--path", ids["acquire"], "--path", ids["compute"], "--path", ids["display"],
+        "--add", ids["trace"],
+    )
+    ch = res["created"]["uuid"]
+    shown = run("chain", "show", ch)
+    assert [s["exchange"]["name"] for s in shown["steps"]] == ["pos", "route", "trace"]
+    assert {e["name"] for e in shown["exit"]} == {"display", "log"}
+    assert shown["issues"] == []
+    assert run("show", ids["compute"])["chains"][0]["uuid"] == ch
+    assert run("chain", "list", "la", "--involving", ids["trace"])["count"] == 1
+    assert run("check")["ok"]
+
+
+def test_chain_path_needs_exchange(run, model):
+    ids = _nav_model(run)
+    before = (model / "Model Test 7.0.capella").read_bytes()
+    data, code = run(
+        "chain", "create", "--layer", "la", "--name", "x",
+        "--path", ids["acquire"], "--path", ids["display"], ok=False,
+    )
+    assert code == 1 and "No functional exchange" in data["error"]
+    assert (model / "Model Test 7.0.capella").read_bytes() == before
+
+
+def test_chain_remove_and_issues(run):
+    ids = _nav_model(run)
+    ch = run(
+        "chain", "create", "--layer", "la", "--name", "N",
+        "--path", ids["acquire"], "--path", ids["compute"], "--path", ids["display"],
+    )["created"]["uuid"]
+    run("chain", "remove", ch, ids["route"])
+    issues = run("chain", "show", ch)["issues"]
+    assert len(issues) == 1 and "display" in issues[0]
+    res = run("chain", "remove", ch, ids["display"])
+    assert [r["type"] for r in res["removed"]] == ["FunctionalChainInvolvementFunction"]
+    assert run("chain", "show", ch)["issues"] == []
+    assert run("show", ids["display"])["uuid"] == ids["display"]  # function kept
+    assert run("check")["ok"]
+
+
+def test_chain_involve_realize_and_delete(run):
+    ids = _nav_model(run, "sa")
+    ch = run(
+        "chain", "create", "--layer", "sa", "--name", "N",
+        "--path", ids["acquire"], "--path", ids["compute"],
+    )["created"]["uuid"]
+    cap = run("list", "sa", "capabilities")["items"][0]["uuid"]
+    run("chain", "involve", ch, cap)
+    assert run("chain", "involve", ch, cap)["unchanged"]
+
+    lf = _nav_model(run, "la")
+    lch = run(
+        "chain", "create", "--layer", "la", "--name", "LN",
+        "--path", lf["acquire"], "--path", lf["compute"],
+    )["created"]["uuid"]
+    run("realize", lch, ch)
+    assert run("chain", "show", ch)["realizing_chains"][0]["uuid"] == lch
+
+    # Deleting a function used by a chain is guarded, and cascades cleanly.
+    data, code = run("delete", ids["compute"], ok=False)
+    assert code == 1 and "FunctionalChainInvolvement" in data["error"]
+    run("delete", ids["compute"], "--cascade")
+    assert run("check")["ok"]
+    res = run("delete", ch, "--cascade")
+    assert "FunctionalChainAbstractCapabilityInvolvement" in {d["type"] for d in res["deleted"]}
+    assert run("check")["ok"]
+
+
+def test_operational_process(run):
+    ids = _nav_model(run, "oa")
+    res = run("batch", input=json.dumps([
+        {"op": "create-chain", "as": "p", "layer": "oa", "name": "Trip",
+         "path": [f"{ids['acquire']}", f"{ids['compute']}"]},
+        {"op": "chain-add", "chain": "$p", "elements": [ids["route"]]},
+    ]))
+    p = res["steps"][0]["created"]
+    assert p["type"] == "OperationalProcess"
+    assert [s["exchange"]["name"] for s in run("chain", "show", p["uuid"])["steps"]] == ["pos", "route"]
+    assert run("check")["ok"]

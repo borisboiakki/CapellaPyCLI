@@ -27,9 +27,13 @@ text edit silently breaks them.
 4. **Group related changes** into one `capcli batch`: it is all-or-nothing.
 5. **After every write session**, run `capcli check` (it must report `"ok": true`)
    and `capcli validate --layer <layer>`, then show the user `git diff --stat`.
-6. New elements do not appear on existing diagrams. Tell the user which
+6. After changing a functional chain, run `capcli chain show <chain>`. Its
+   `issues` list must be empty, unless the user asked for a partial chain.
+   A chain path only works if the exchanges between its functions exist;
+   create any that are missing first.
+7. New elements do not appear on existing diagrams. Tell the user which
    diagrams need updating in Capella, because capcli can't lay them out.
-7. If capcli cannot do something, say so and propose a reviewed Python script
+8. If capcli cannot do something, say so and propose a reviewed Python script
    using `capellambse`. Don't work around it with raw XML edits.
 
 ## Naming conventions (ADJUST)
@@ -72,6 +76,16 @@ capcli set <uuid> name="new name" description="<p>html</p>"
 capcli delete <uuid>                          # refuses while referenced
 capcli --dry-run delete <uuid> --cascade      # preview what cascade removes
 
+# Functional chains (operational processes in OA)
+capcli chain list la [--involving <fn-or-exchange>]
+capcli chain show <chain>                     # ordered steps, entry/exit, issues
+capcli chain create --layer la --name "Navigate" \
+    --path <fn1> --path <fn2> --path <fn3>    # consecutive fns joined by their exchange
+capcli chain add <chain> <exchange|function>...   # an exchange brings both its functions
+capcli chain remove <chain> <exchange|function>...  # takes them out of the chain only
+capcli chain involve <chain> <capability>
+capcli realize <la-chain> <sa-chain>
+
 # Verify
 capcli check                                  # dangling/empty references (exit 2 if bad)
 capcli validate --layer la [--all]
@@ -95,5 +109,8 @@ EOF
 
 Ops: `create-function`, `create-component`, `create-function-exchange`,
 `create-component-exchange`, `allocate`, `unallocate` (`"from"`), `realize`
-(`"element"`, `"realized"`), `set` (`"values"`), `delete` (`"cascade"`).
+(`"element"`, `"realized"`), `set` (`"values"`), `delete` (`"cascade"`),
+`create-chain` (`"name"`, `"layer"` or `"parent"`, `"path"`, `"elements"`, `"kind"`),
+`chain-add` / `chain-remove` (`"chain"`, `"elements"`), `involve-chain`
+(`"chain"`, `"capability"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.
