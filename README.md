@@ -60,8 +60,11 @@ either one, or both.
      `.claude/skills/` and `.agents/skills/`, and you can put it in
      `~/.config/opencode/skills/` to use it in every project.
    - Claude Code: `.claude/skills/capella-model/SKILL.md`.
-2. Edit the "Project settings" table (model path, allowed layers, naming rules).
-   Keep the folder name and the `name:` field equal (`capella-model`).
+2. Nothing else to set: at the start of a session the agent asks which model
+   (`.aird` file) to use and which Capella perspectives (OA, SA, LA, PA) it
+   may change, unless `CAPELLA_MODEL` or your `AGENTS.md` already says so.
+   Adjust the naming conventions if needed, and keep the folder name and the
+   `name:` field equal (`capella-model`).
 
 A skill keeps the context small when most tasks don't touch the model. But the
 agent only follows its rules once it decides to load the skill. If you need the
