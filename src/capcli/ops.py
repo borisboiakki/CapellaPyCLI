@@ -7,6 +7,7 @@ the caller so several operations can be applied atomically (see ``batch``).
 
 from __future__ import annotations
 
+import inspect
 import re
 from typing import Any, Callable
 
@@ -18,6 +19,7 @@ from . import chains as _chains
 from . import data as _data
 from . import modes as _modes
 from . import physical as _physical
+from . import interfaces as _interfaces
 from . import structure as _structure
 from . import status as _status
 from .model import (
@@ -249,10 +251,15 @@ def realize(model, element: str, realized: str):
         attr = "realized_chains"
     elif _capabilities.is_capability(elem) and _capabilities.is_capability(up):
         attr = "realized_capabilities"
+    elif type_name(elem) in ("State", "Mode") and type_name(up) == type_name(elem):
+        attr = "realized_states"
+    elif type_name(elem) == type_name(up) == "StateTransition":
+        attr = "realized_transitions"
     else:
         raise CapError(
-            "realize links function->function, component->component, "
-            "chain->chain or capability->capability"
+            "realize links function->function, component->component, chain->chain, "
+            "capability->capability, state->state, mode->mode or "
+            "transition->transition"
         )
     order = ["oa", "sa", "la", "pa"]
     ke, ku = _require_layer(elem), _require_layer(up)
@@ -373,7 +380,8 @@ def set_attrs(model, element: str, values: dict[str, str]):
 # and can therefore be removed together with it (``delete --cascade``).
 _CASCADABLE = re.compile(
     r"(Exchange|CommunicationMean|Allocation|Realization|Involvement\w*|"
-    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition)$"
+    r"Link|Part|Port|Trace|Generalization|Include|Extend|Exploitation|StateTransition|"
+    r"InterfaceImplementation|InterfaceUse)$"
 )
 _EXCHANGE = re.compile(r"(Exchange|CommunicationMean)$")
 # List-valued references that only say "this exchange/port carries that item".
@@ -384,7 +392,19 @@ _DETACHABLE_ATTRS = {
     # A transition's effects (functions) and triggers (exchanges, items):
     # deleting one of those must not delete the transition.
     "effect", "triggers",
+    # A state's entry/exit/do activities (functions).
+    "entry", "exit", "doActivity",
+    # Interfaces provided/required by component ports.
+    "providedInterfaces", "requiredInterfaces",
 }
+# Same, for attribute names that are too generic to detach on every element.
+_DETACHABLE_TYPED = {("PhysicalLinkCategory", "links")}
+
+
+def _detachable(el, attr: str) -> bool:
+    return attr in _DETACHABLE_ATTRS or (_xtype(el), attr) in _DETACHABLE_TYPED
+
+
 # Caches Capella keeps on regions and states (see modes.py): always updated,
 # never a reason to refuse a delete.
 _ALWAYS_DETACH_ATTRS = {"involvedStates", "referencedStates"}
@@ -475,7 +495,7 @@ def delete(model, element: str, cascade: bool = False):
                     path = owner.getparent()
                     blockers.append({"uuid": path.get("id"), "type": _xtype(path), "name": path.get("name"), "via": "involvement"})
                 continue
-            if attr in _DETACHABLE_ATTRS:
+            if _detachable(el, attr):
                 if not cascade:
                     blockers.append(info)
                 continue  # detached below
@@ -507,7 +527,7 @@ def delete(model, element: str, cascade: bool = False):
     ids = doomed_ids()
     detached = []
     for el, attr, ref in list(iter_refs(model)):
-        if attr in _DETACHABLE_ATTRS | _ALWAYS_DETACH_ATTRS and ref in ids and not inside_doomed(el):
+        if (_detachable(el, attr) or attr in _ALWAYS_DETACH_ATTRS) and ref in ids and not inside_doomed(el):
             tokens = [t for t in el.get(attr).split() if t.rpartition("#")[2] != ref]
             if tokens:
                 el.set(attr, " ".join(tokens))
@@ -600,16 +620,19 @@ def check(model, fix: bool = False) -> dict[str, Any]:
                     incomplete.append({"uuid": el.get("id"), "type": _xtype(el), "missing": "sourceElement"})
     structure = structure_violations(model)
     caches = _modes.cache_mismatches(model, fix=fix)
+    bad_impl = _interfaces.bad_implementations(model, fix=fix)
     if fix:
-        fixed += len(caches)
-        caches = []
+        fixed += len(caches) + len(bad_impl)
+        caches, bad_impl = [], []
     res: dict[str, Any] = {
-        "ok": not dangling and not empty and not incomplete and not structure and not caches,
+        "ok": not dangling and not empty and not incomplete and not structure and not caches
+        and not bad_impl,
         "dangling": dangling,
         "empty": empty,
         "incomplete": incomplete,
         "structure": structure,
         "state_caches": caches,
+        "interface_implementations": bad_impl,
     }
     if fix:
         res["fixed"] = fixed
@@ -663,9 +686,8 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
             kwargs["from_"] = kwargs.pop("from")
         if op == "add-property" and "class" in kwargs:
             kwargs["cls"] = kwargs.pop("class")  # `class` is a Python keyword
-        if op in ("create-chain", "create-capability", "create-class", "create-enumeration",
-                  "create-exchange-item") and "layer" in kwargs:
-            kwargs["layer_name"] = kwargs.pop("layer")
+        if "layer" in kwargs and "layer_name" in inspect.signature(OPS[op]).parameters:
+            kwargs["layer_name"] = kwargs.pop("layer")  # every create op taking a layer
         try:
             res = OPS[op](model, **kwargs)
         except CapError as e:
@@ -687,3 +709,4 @@ OPS.update(_data.OPS)
 OPS.update(_modes.OPS)
 OPS.update(_physical.OPS)
 OPS.update(_structure.OPS)
+OPS.update(_interfaces.OPS)

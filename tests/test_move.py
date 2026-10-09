@@ -107,3 +107,25 @@ def test_repair_structure(run, model):
     assert [x["name"] for x in res["needs_decision"]] == ["Flight Control System"]
     remaining = run("check", ok=False)[0]["structure"]
     assert [v["name"] for v in remaining] == ["Flight Control System"]
+
+
+def test_reorder(run):
+    res = run("batch", input=json.dumps([
+        {"op": "create-function", "as": "a", "parent": "la:root-function", "name": "A"},
+        {"op": "create-function", "as": "b", "parent": "la:root-function", "name": "B"},
+        {"op": "create-function", "as": "c", "parent": "la:root-function", "name": "C"},
+    ]))
+    ids = _ids(res)
+    names = lambda: [f["name"] for f in run("show", "la:root-function")["functions"] if f["name"] in "ABC"]  # noqa: E731
+    run("reorder", ids["c"], "--before", ids["a"])
+    assert names() == ["C", "A", "B"]
+    run("reorder", ids["c"], "--last")
+    assert names() == ["A", "B", "C"]
+    run("reorder", ids["a"], "--after", ids["b"])
+    assert names() == ["B", "A", "C"]
+    assert run("reorder", ids["a"], "--after", ids["a"])["unchanged"]
+    data, code = run("reorder", ids["a"], "--before", "la:root-component", ok=False)
+    assert code == 1 and "sibling" in data["error"]
+    data, code = run("reorder", ids["a"], "--first", "--last", ok=False)
+    assert code == 1 and "exactly one" in data["error"]
+    assert run("check")["ok"]

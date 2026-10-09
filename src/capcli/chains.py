@@ -16,7 +16,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .model import CapError, brief, endpoint_owner, layer, resolve, root_function, type_name, with_status
+from .model import (CapError, brief, constraint_text, endpoint_owner, layer, resolve, root_function,
+                    type_name, with_status)
 from .model import is_function as _is_function
 from .model import require_layer as _require_layer
 from .model import same_layer as _same_layer
@@ -205,6 +206,37 @@ def create_chain(
     return {"created": brief(ch), "parent": brief(par), **_summary(ch)}
 
 
+def link_items(model, chain: str, exchange: str, elements: list[str], remove: bool = False):
+    """Exchange items carried on one chain link (a subset of the exchange's)."""
+    ch = _chain(model, chain)
+    ex = resolve(model, exchange)
+    links = [i for i in _link_involvements(ch) if i.involved == ex]
+    if not links:
+        raise CapError(f"{brief(ex)} is not part of chain {ch.uuid}; `chain add` it first")
+    link = links[0]
+    changed, unchanged = [], []
+    for ref in elements:
+        ei = resolve(model, ref)
+        if type_name(ei) != "ExchangeItem":
+            raise CapError(f"Chain links carry exchange items, not {type_name(ei)}")
+        present = ei in link.exchanged_items
+        if remove:
+            if not present:
+                raise CapError(f"{brief(ei)} is not carried on this chain link")
+            link.exchanged_items.remove(ei)
+            changed.append(brief(ei))
+        elif present:
+            unchanged.append(brief(ei))
+        else:
+            link.exchanged_items.append(ei)
+            changed.append(brief(ei))
+    out = {"chain": brief(ch), "exchange": brief(ex), "removed" if remove else "added": changed, "unchanged": unchanged}
+    not_on_exchange = [x["name"] for x in changed if not remove and resolve(model, x["uuid"]) not in ex.exchanged_items]
+    if not_on_exchange:
+        out["warning"] = f"not carried by the exchange itself: {', '.join(not_on_exchange)} (see `data assign`)"
+    return out
+
+
 def involve_chain(model, chain: str, capability: str):
     """Declare that a capability involves the chain."""
     ch = _chain(model, chain)
@@ -259,7 +291,7 @@ def _summary(ch, full: bool = False) -> dict[str, Any]:
         "entry": [brief(f) for f in fns if f.uuid not in has_in],
         "exit": [brief(f) for f in fns if f.uuid not in has_out],
         "steps": [
-            {"from": brief(s), "exchange": brief(x), "to": brief(t)} for s, x, t in _ordered(fns, edges)
+            {"from": brief(s), "exchange": brief(x), "to": brief(t), **_items_on(links, x)} for s, x, t in _ordered(fns, edges)
         ],
         "issues": issues,
     }
@@ -270,10 +302,20 @@ def _summary(ch, full: bool = False) -> dict[str, Any]:
         if ch.description:
             head["description"] = str(ch.description)
         head["functions"] = [brief(f) for f in fns]
+        for cond in ("precondition", "postcondition"):
+            c = getattr(ch, cond, None)
+            if c is not None:  # same keys as a capability's show
+                head[cond] = brief(c)
+                head[f"{cond}_text"] = constraint_text(c)
         head["realized_chains"] = [brief(c) for c in ch.realized_chains]
         head["realizing_chains"] = [brief(c) for c in ch.realizing_chains]
         return {**head, **out}
     return out
+
+
+def _items_on(links, ex) -> dict[str, Any]:
+    items = [brief(ei) for link in links if link.involved == ex for ei in link.exchanged_items]
+    return {"exchange_items": items} if items else {}
 
 
 def _components(fns, edges) -> int:
@@ -315,4 +357,5 @@ OPS = {
     "chain-add": add_to_chain,
     "chain-remove": remove_from_chain,
     "involve-chain": involve_chain,
+    "chain-link-items": link_items,
 }

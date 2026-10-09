@@ -97,6 +97,7 @@ capcli allocate <function> <component> [--move]
 capcli allocate <functional-exchange> <component-exchange>
 capcli unallocate <function> <component>
 capcli realize <la-function> <sa-function>    # traceability to the layer above
+                                              # (also states, modes and transitions)
 capcli set <uuid> name="new name" description="<p>html</p>"
 capcli delete <uuid>                          # refuses while referenced
 capcli --dry-run delete <uuid> --cascade      # preview what cascade removes
@@ -109,6 +110,8 @@ capcli chain create --layer la --name "Navigate" \
 capcli chain add <chain> <exchange|function>...   # an exchange brings both its functions
 capcli chain remove <chain> <exchange|function>...  # takes them out of the chain only
 capcli chain involve <chain> <capability>
+capcli chain items <chain> <exchange> <exchange-item>... [--remove]   # items on that chain link
+capcli chain condition <chain> --pre "text" --post "text" [--clear-pre] [--clear-post]
 capcli realize <la-chain> <sa-chain>
 
 # Capabilities (OperationalCapability in OA, Capability in SA,
@@ -122,12 +125,17 @@ capcli capability uninvolve <cap> <element>...    # removes the link only
 capcli capability include <cap> <other> [--remove]
 capcli capability extend <cap> <other> [--remove]
 capcli capability generalize <cap> <more-general-cap> [--remove]
+capcli capability condition <cap> --pre "text" --post "text" [--clear-pre] [--clear-post]
 capcli realize <la-capability> <sa-capability>    # sa->oa, la->sa, pa->la
 capcli unrealize <element> <realized>         # works for every kind of realization
 
 # Data model (classes, enumerations, exchange items)
 capcli data types --layer la [--name int]     # types usable from LA (own + layers above)
+capcli data type --layer la --name Speed --kind boolean|integer|float|string|physical-quantity
 capcli data class create --layer la --name "Position"
+capcli data union --layer la --name Value     # members: `data property add <union> …`
+capcli data collection --layer la --name Route --type <item-type> [--min 0] [--max '*']
+capcli data generalize <class> <super-class> [--remove]   # also unions, enums, collections
 capcli data property add <class> --name lat --type <type> [--min 0] [--max '*'] [--kind composition]
 capcli data enum create --layer la --name NavMode --literal AUTO --literal MANUAL
 capcli data enum add-literal <enum> SAFE
@@ -140,9 +148,12 @@ capcli data show <uuid>                       # properties, literals, elements, 
 capcli mode list sa                           # state machines of a layer, with owner
 capcli mode machine create sa:root-component  # "<owner> State Machine" + Default Region
 capcli mode add <machine|region|state> --name Off [--kind state|mode|initial|final|choice|…]
+    # kinds: state mode initial final terminate choice fork join
+    #        shallow-history deep-history entry-point exit-point
 capcli mode transition <source> <target> [--trigger <exchange|item>] [--effect <function>] \
     [--guard "power > 10"] [--trigger-description "power on"]
 capcli mode available <state> <function|chain|capability>... [--remove]
+capcli mode activity <state> [--entry <fn>] [--exit <fn>] [--do <fn>] [--remove]
 capcli mode show <machine|state>              # tree, transitions, availability, issues
 
 # Physical architecture (PA)
@@ -153,12 +164,24 @@ capcli pa deploy <behaviour-or-node> <host> [--remove]   # never a node on a beh
 capcli pa path --name cam-to-ecu --link <link1> --link <link2>   # consecutive links
 capcli allocate <component-exchange> <physical-link|physical-path>
 capcli allocate <component-port> <physical-port>
+capcli pa category --parent pa:root-component --name "CAN buses"
+capcli pa categorize <category> <physical-link>... [--remove]
 capcli pa show <component|port|link|path>     # deployment, hops, allocations, issues
 
 # Structure: packages, moving, repair
 capcli package create --parent <la:functions|la:structure|la:capabilities|la:data|la:interfaces|pkg|function|component> --name Avionics
 capcli move <element> <new-parent>            # same layer; Part and exchanges follow
+capcli reorder <element> --before|--after <sibling>   # or --first / --last
 capcli --dry-run repair structure             # preview, then without --dry-run to apply
+
+# Interfaces
+capcli interface list la
+capcli interface create --layer la --name INav
+capcli interface items <interface> <exchange-item>... [--remove]
+capcli interface provide <component|component-port> <interface> [--remove]
+capcli interface require <component|component-port> <interface> [--remove]
+capcli interface allocate <component|interface> <interface> [--remove]
+capcli interface show <interface>             # items, providers, requirers, allocations, issues
 
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
@@ -216,5 +239,16 @@ or `"parent"`, plus `"literals"` / `"mechanism"`), `add-property` (`"class"`,
 `create-physical-port` (`"component"`, `"name"`), `create-physical-link` (`"source"`,
 `"target"`, `"name"`), `create-physical-path` (`"name"`, `"links"`, `"parent"`), `deploy`
 (`"element"`, `"host"`, `"remove"`), `create-package` (`"parent"`, `"name"`), `move`
-(`"element"`, `"to"`).
+(`"element"`, `"to"`), `create-interface` (`"name"`, `"layer"` or `"parent"`),
+`interface-items` (`"interface"`, `"elements"`, `"remove"`), `provide-interface` /
+`require-interface` / `allocate-interface` (`"element"`, `"interface"`, `"remove"`),
+`create-type` (`"name"`, `"kind"`, `"layer"` or `"parent"`), `create-union` (`"name"`,
+`"layer"` or `"parent"`), `create-collection` (`"name"`, `"type"`, `"layer"` or
+`"parent"`, `"min"`, `"max"`), `generalize` (`"element"`, `"super"`, `"remove"`),
+`chain-link-items` (`"chain"`, `"exchange"`, `"elements"`, `"remove"`),
+`set-conditions` (`"element"`, `"pre"`, `"post"`, `"clear_pre"`, `"clear_post"`),
+`set-activities` (`"state"`, `"entry"`, `"exit"`, `"do"`, `"remove"`; lists of
+functions), `create-link-category` (`"parent"`, `"name"`), `link-category-links`
+(`"category"`, `"links"`, `"remove"`), `reorder` (`"element"`, `"before"`, `"after"`,
+`"first"`, `"last"`).
 `"as"` names the element created by a step, and `"$name"` refers to it in a later step.

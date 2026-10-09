@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, modes, ops, physical, status, structure
+from . import __version__, capabilities, chains, data, interfaces, modes, ops, physical, status, structure
 from .model import (
     LAYERS,
     CapError,
@@ -181,6 +181,9 @@ def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
         return
     if capabilities.is_capability(obj) and not attrs:
         emit(capabilities.show_capability(ctx.model, uuid))
+        return
+    if type_name(obj) == "Interface" and not attrs:
+        emit(interfaces.show(ctx.model, uuid))
         return
     if physical.is_physical_element(obj) and not attrs:
         emit(physical.show(ctx.model, uuid))
@@ -545,6 +548,29 @@ def chain_remove(model, chain_uuid, elements):
     return chains.remove_from_chain(model, chain_uuid, list(elements))
 
 
+@chain.command("items")
+@click.argument("chain_uuid", metavar="CHAIN")
+@click.argument("exchange")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def chain_items(model, chain_uuid, exchange, elements, remove):
+    """Exchange items carried on the chain link of EXCHANGE."""
+    return chains.link_items(model, chain_uuid, exchange, list(elements), remove)
+
+
+@chain.command("condition")
+@click.argument("chain_uuid", metavar="CHAIN")
+@click.option("--pre", help="Precondition text.")
+@click.option("--post", help="Postcondition text.")
+@click.option("--clear-pre", is_flag=True)
+@click.option("--clear-post", is_flag=True)
+@write_command
+def chain_condition(model, chain_uuid, pre, post, clear_pre, clear_post):
+    """Set or clear the pre-/postcondition of a functional chain."""
+    return capabilities.set_conditions(model, chain_uuid, pre, post, clear_pre, clear_post)
+
+
 @chain.command("involve")
 @click.argument("chain_uuid", metavar="CHAIN")
 @click.argument("capability")
@@ -598,6 +624,18 @@ def capability_show(ctx: Ctx, uuid: str) -> None:
 def capability_create(model, name, layer_name, parent, description):
     """Create a capability with the right metaclass for the layer."""
     return capabilities.create_capability(model, name, layer_name, parent, description)
+
+
+@capability.command("condition")
+@click.argument("capability_uuid", metavar="CAPABILITY")
+@click.option("--pre", help="Precondition text.")
+@click.option("--post", help="Postcondition text.")
+@click.option("--clear-pre", is_flag=True)
+@click.option("--clear-post", is_flag=True)
+@write_command
+def capability_condition(model, capability_uuid, pre, post, clear_pre, clear_post):
+    """Set or clear the pre-/postcondition of a capability."""
+    return capabilities.set_conditions(model, capability_uuid, pre, post, clear_pre, clear_post)
 
 
 @capability.command("involve")
@@ -673,6 +711,53 @@ def data_class() -> None:
 def data_class_create(model, name, layer_name, parent, description):
     """Create a class in a data package."""
     return data.create_class(model, name, layer_name, parent, description)
+
+
+@data_group.command("type")
+@click.option("--name", required=True)
+@click.option("--kind", required=True, type=click.Choice(list(data.BASIC_KINDS), case_sensitive=False))
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def data_type(model, name, kind, layer_name, parent, description):
+    """Create a basic type: boolean (with True/False), integer, float, string, physical-quantity."""
+    return data.create_type(model, name, kind, layer_name, parent, description)
+
+
+@data_group.command("union")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def data_union(model, name, layer_name, parent, description):
+    """Create a union (add its members with `data property add`)."""
+    return data.create_union(model, name, layer_name, parent, description)
+
+
+@data_group.command("collection")
+@click.option("--name", required=True)
+@click.option("--type", "type_", required=True, help="Item type UUID.")
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Data package UUID (instead of --layer).")
+@click.option("--min", "min_", default="0", show_default=True)
+@click.option("--max", "max_", default="*", show_default=True)
+@click.option("--description")
+@write_command
+def data_collection(model, name, type_, layer_name, parent, min_, max_, description):
+    """Create a collection of an item type with a multiplicity."""
+    return data.create_collection(model, name, type_, layer_name, parent, min_, max_, description)
+
+
+@data_group.command("generalize")
+@click.argument("element")
+@click.argument("super_", metavar="SUPER")
+@click.option("--remove", is_flag=True)
+@write_command
+def data_generalize(model, element, super_, remove):
+    """ELEMENT specializes SUPER (classes, unions, enumerations or collections)."""
+    return data.generalize(model, element, super_, remove)
 
 
 @data_group.group("property")
@@ -824,6 +909,18 @@ def mode_transition(model, source, target, triggers, effects, trigger_descriptio
                                 trigger_description, guard, name)
 
 
+@mode_group.command("activity")
+@click.argument("state")
+@click.option("--entry", "entry", multiple=True, help="Function run on entry (repeatable).")
+@click.option("--exit", "exit_", multiple=True, help="Function run on exit (repeatable).")
+@click.option("--do", "do", multiple=True, help="Function run while in the state (repeatable).")
+@click.option("--remove", is_flag=True)
+@write_command
+def mode_activity(model, state, entry, exit_, do, remove):
+    """Set the entry, exit and do activities of a state or mode."""
+    return modes.set_activities(model, state, list(entry), list(exit_), list(do), remove)
+
+
 @mode_group.command("available")
 @click.argument("state")
 @click.argument("elements", nargs=-1, required=True)
@@ -886,6 +983,25 @@ def pa_path(model, name, links, parent):
     return physical.create_path(model, name, list(links), parent)
 
 
+@pa_group.command("category")
+@click.option("--parent", required=True, help="Physical component or package owning the category.")
+@click.option("--name", required=True)
+@write_command
+def pa_category(model, parent, name):
+    """Create a physical link category."""
+    return physical.create_category(model, parent, name)
+
+
+@pa_group.command("categorize")
+@click.argument("category")
+@click.argument("links", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def pa_categorize(model, category, links, remove):
+    """Put physical links in (or --remove them from) a category."""
+    return physical.category_links(model, category, list(links), remove)
+
+
 @pa_group.command("deploy")
 @click.argument("element")
 @click.argument("host")
@@ -894,6 +1010,80 @@ def pa_path(model, name, links, parent):
 def pa_deploy(model, element, host, remove):
     """Deploy ELEMENT (a behaviour or node component) on HOST."""
     return physical.deploy(model, element, host, remove)
+
+
+@cli.group("interface")
+def interface_group() -> None:
+    """Interfaces: exchange items, provided/required, allocation."""
+
+
+@interface_group.command("list")
+@click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
+@click.pass_obj
+@handled
+def interface_list(ctx: Ctx, layer_name: str) -> None:
+    """List the interfaces of a layer."""
+    emit(interfaces.list_interfaces(ctx.model, layer_name))
+
+
+@interface_group.command("show")
+@click.argument("uuid")
+@click.pass_obj
+@handled
+def interface_show(ctx: Ctx, uuid: str) -> None:
+    """Show an interface: items, providers, requirers, allocations, issues."""
+    emit(interfaces.show(ctx.model, uuid))
+
+
+@interface_group.command("create")
+@click.option("--name", required=True)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.option("--parent", help="Interface package UUID (instead of --layer).")
+@click.option("--description")
+@write_command
+def interface_create(model, name, layer_name, parent, description):
+    """Create an interface in an interface package."""
+    return interfaces.create_interface(model, name, layer_name, parent, description)
+
+
+@interface_group.command("items")
+@click.argument("interface")
+@click.argument("elements", nargs=-1, required=True)
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_items(model, interface, elements, remove):
+    """Add (or --remove) exchange items carried by INTERFACE."""
+    return interfaces.set_items(model, interface, list(elements), remove)
+
+
+@interface_group.command("provide")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_provide(model, element, interface, remove):
+    """ELEMENT (component or component port) provides INTERFACE."""
+    return interfaces.provide(model, element, interface, remove)
+
+
+@interface_group.command("require")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_require(model, element, interface, remove):
+    """ELEMENT (component or component port) requires INTERFACE."""
+    return interfaces.require(model, element, interface, remove)
+
+
+@interface_group.command("allocate")
+@click.argument("element")
+@click.argument("interface")
+@click.option("--remove", is_flag=True)
+@write_command
+def interface_allocate(model, element, interface, remove):
+    """Allocate INTERFACE to ELEMENT (a component or another interface)."""
+    return interfaces.allocate_interface(model, element, interface, remove)
 
 
 @cli.group("package")
@@ -917,6 +1107,18 @@ def package_create(model, parent, name):
 def move_cmd(model, element, to):
     """Move ELEMENT under TO (same layer); its Part and exchanges follow."""
     return structure.move(model, element, to)
+
+
+@cli.command("reorder")
+@click.argument("element")
+@click.option("--before", help="Sibling to place ELEMENT before.")
+@click.option("--after", help="Sibling to place ELEMENT after.")
+@click.option("--first", is_flag=True)
+@click.option("--last", is_flag=True)
+@write_command
+def reorder_cmd(model, element, before, after, first, last):
+    """Change ELEMENT's position among its siblings."""
+    return structure.reorder(model, element, before, after, first, last)
 
 
 @cli.group("repair")

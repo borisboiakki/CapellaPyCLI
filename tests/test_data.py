@@ -118,3 +118,53 @@ def test_delete_type_in_use_is_blocked(run):
     ids = _build(run)
     data, code = run("delete", ids["pos"], "--cascade", ok=False)
     assert code == 1 and "ExchangeItemElement" in data["error"]
+
+
+def test_basic_types_union_collection(run, model):
+    res = run("batch", input=json.dumps([
+        {"op": "create-type", "as": "b", "layer": "la", "name": "Flag", "kind": "boolean"},
+        {"op": "create-type", "as": "n", "layer": "la", "name": "Count", "kind": "integer"},
+        {"op": "create-type", "as": "f", "layer": "la", "name": "Ratio", "kind": "float"},
+        {"op": "create-type", "as": "s", "layer": "la", "name": "Label", "kind": "string"},
+        {"op": "create-union", "as": "u", "layer": "la", "name": "Value"},
+        {"op": "add-property", "class": "$u", "name": "count", "type": "$n"},
+        {"op": "create-collection", "as": "c", "layer": "la", "name": "Counts", "type": "$n"},
+    ]))
+    ids = {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
+    tree = _xml(model)
+    lits = _by_id(tree, ids["b"]).findall("ownedLiterals")  # Capella writes True/False
+    assert [(e.get("name"), e.get("value"), e.get("abstractType")) for e in lits] == [
+        ("True", "true", "#" + ids["b"]), ("False", None, "#" + ids["b"])]
+    assert _by_id(tree, ids["n"]).get("kind") is None  # INTEGER is the default, not written
+    assert (_by_id(tree, ids["f"]).get("kind"), _by_id(tree, ids["f"]).get("discrete")) == ("FLOAT", "false")
+    assert [p["name"] for p in run("show", ids["u"])["properties"]] == ["count"]
+    col = run("show", ids["c"])
+    assert col["item_type"]["uuid"] == ids["n"] and col["multiplicity"] == "0..*" and col["issues"] == []
+    data, code = run("batch", input=json.dumps([{"op": "create-type", "layer": "la", "name": "X", "kind": "blob"}]), ok=False)
+    assert code == 1 and "boolean, integer" in data["error"]
+    pa_type = run("data", "type", "--layer", "pa", "--name", "PaInt", "--kind", "integer")["created"]["uuid"]
+    data, code = run("data", "collection", "--layer", "la", "--name", "Bad", "--type", pa_type, ok=False)
+    assert code == 1 and "layer" in data["error"]
+    assert run("check")["ok"]
+
+
+def test_generalize(run, model):
+    ids = _build(run)
+    sub = run("data", "class", "create", "--layer", "la", "--name", "GpsPosition")["created"]["uuid"]
+    run("data", "generalize", sub, ids["pos"])
+    assert run("data", "generalize", sub, ids["pos"])["unchanged"]
+    assert [x["uuid"] for x in run("show", sub)["specializes"]] == [ids["pos"]]
+    assert [x["uuid"] for x in run("show", ids["pos"])["specialized_by"]] == [sub]
+    g = _by_id(_xml(model), sub).find("ownedGeneralizations")
+    assert (g.get("super"), g.get("sub")) == ("#" + ids["pos"], "#" + sub)  # as Capella writes it
+    data, code = run("data", "generalize", ids["pos"], sub, ok=False)
+    assert code == 1 and "cycle" in data["error"]
+    data, code = run("data", "generalize", sub, ids["mode"], ok=False)
+    assert code == 1 and "same kind" in data["error"]
+    run("data", "generalize", sub, ids["pos"], "--remove")
+    assert run("show", sub).get("specializes", []) == []
+    base = run("data", "class", "create", "--layer", "sa", "--name", "Base")["created"]["uuid"]
+    run("data", "generalize", sub, base)  # a class of a layer above is visible
+    run("delete", base, "--cascade")  # the generalization goes with it
+    assert run("show", sub).get("specializes", []) == []
+    assert run("check")["ok"]

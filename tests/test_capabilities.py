@@ -197,3 +197,30 @@ def test_deleting_involved_function_cascades_involvement(run):
     run("delete", ids["f"], "--cascade")
     assert run("capability", "show", ids["c"])["involves"]["functions"] == []
     assert run("check")["ok"]
+
+
+def test_pre_and_postconditions(run, model):
+    run("capability", "condition", SA_CAP, "--pre", "power is on", "--post", "target tracked")
+    shown = run("show", SA_CAP)
+    assert (shown["precondition_text"], shown["postcondition_text"]) == ("power is on", "target tracked")
+    run("capability", "condition", SA_CAP, "--pre", "power is stable")  # replaces, no orphan
+    tree = _capella_xml(model)
+    cap = next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("id") == SA_CAP)
+    constraints = cap.findall("ownedConstraints")
+    assert len(constraints) == 2  # pre + post, the old pre was removed
+    pre = next(c for c in constraints if "#" + c.get("id") == cap.get("preCondition"))
+    spec = pre.find("ownedSpecification")
+    assert spec.get("{http://www.w3.org/2001/XMLSchema-instance}type").endswith(":OpaqueExpression")
+    assert [spec.findtext("bodies"), spec.findtext("languages")] == ["power is stable", "capella:linkedText"]
+    run("capability", "condition", SA_CAP, "--clear-post")
+    shown = run("show", SA_CAP)
+    assert shown["precondition_text"] == "power is stable" and "postcondition_text" not in shown
+    chain = run("chain", "list", "sa")["items"][0]["uuid"]
+    run("chain", "condition", chain, "--post", "image displayed")
+    assert run("chain", "show", chain)["postcondition_text"] == "image displayed"
+    fn = run("list", "sa", "functions")["items"][1]["uuid"]
+    data, code = run("capability", "condition", fn, "--pre", "x", ok=False)
+    assert code == 1 and "capabilities and functional chains" in data["error"]
+    data, code = run("capability", "condition", SA_CAP, ok=False)
+    assert code == 1 and "--pre" in data["error"]
+    assert run("check")["ok"]

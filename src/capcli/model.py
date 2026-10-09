@@ -210,6 +210,7 @@ SHOW_ATTRS = (
     "deployed_components",
     "realized_chains",
     "realizing_chains",
+    "links",  # physical link categories
 )
 
 
@@ -321,6 +322,41 @@ def add_xml_child(model, parent_el, tag: str, xtype: str, **attrs: str):
             child.set(k, v)
         loader.idcache_index(child)
     return child
+
+
+def set_constraint(model, owner, xml_attr: str, accessor: str, text: str | None) -> None:
+    """Set (or clear, with None) a text constraint such as a guard or precondition.
+
+    Capella stores it as a ``Constraint`` owned by the element and referenced
+    by ``xml_attr`` (``guard``, ``preCondition``, ``postCondition``), with an
+    ``OpaqueExpression`` specification. capellambse creates the constraint
+    without the specification and can't add one, so it is written here.
+    """
+    from lxml import etree
+
+    old = (owner._element.get(xml_attr) or "").rpartition("#")[2]
+    for c in list(owner.constraints):
+        if old and c.uuid == old:
+            model._loader.idcache_remove(c._element)
+            c._element.getparent().remove(c._element)
+    if xml_attr in owner._element.attrib:
+        del owner._element.attrib[xml_attr]
+    if text is None:
+        return
+    c = owner.constraints.create("Constraint", name="")
+    alias = datavalue_alias(model, c._element)
+    spec = add_xml_child(model, c._element, "ownedSpecification", f"{alias}:OpaqueExpression")
+    etree.SubElement(spec, "bodies").text = text
+    etree.SubElement(spec, "languages").text = "capella:linkedText"
+    setattr(owner, accessor, c)
+
+
+def constraint_text(constraint) -> str | None:
+    if constraint is None:
+        return None
+    spec = constraint._element.find("ownedSpecification")
+    body = spec.find("bodies") if spec is not None else None
+    return body.text if body is not None and body.text is not None else ""
 
 
 NOT_SET = "NOT_SET"

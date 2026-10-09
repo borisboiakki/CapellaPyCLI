@@ -291,3 +291,23 @@ def test_type_search_includes_unnamed_elements(run):
     hits = run("search", "TestReq1")["items"]
     assert [h["type"] for h in hits] == ["Requirement"]
     assert run("search", "zzz-no-such-name", "--type", "Requirement")["count"] == 0
+
+
+def test_chain_link_exchange_items(run):
+    step = run("chain", "show", SA_CHAIN)["steps"][0]
+    assert [x["name"] for x in step["exchange_items"]] == ["ExchangeItem 1"]  # Capella-written
+    fe = step["exchange"]["uuid"]
+    ei = run("data", "exchange-item", "create", "--layer", "sa", "--name", "Extra")["created"]["uuid"]
+    res = run("chain", "items", SA_CHAIN, fe, ei)
+    assert "Extra" in res["warning"]  # the exchange itself doesn't carry it
+    assert run("chain", "items", SA_CHAIN, fe, ei)["unchanged"]
+    assert ei in {x["uuid"] for x in run("chain", "show", SA_CHAIN)["steps"][0]["exchange_items"]}
+    other = run("create", "function-exchange", "--source", step["to"]["uuid"], "--target", step["from"]["uuid"],
+                "--name", "back")["created"]["uuid"]
+    data, code = run("chain", "items", SA_CHAIN, other, ei, ok=False)
+    assert code == 1 and "chain add" in data["error"]
+    run("delete", ei, "--cascade")  # detached from the chain link
+    assert ei not in {x["uuid"] for x in run("chain", "show", SA_CHAIN)["steps"][0]["exchange_items"]}
+    run("chain", "items", SA_CHAIN, fe, step["exchange_items"][0]["uuid"], "--remove")
+    assert "exchange_items" not in run("chain", "show", SA_CHAIN)["steps"][0]
+    assert run("check")["ok"]
