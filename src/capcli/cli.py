@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, interfaces, modes, ops, physical, status, structure
+from . import __version__, capabilities, chains, data, integrity, interfaces, modes, ops, physical, status, structure
 from .model import (
     LAYERS,
     CapError,
@@ -318,7 +318,7 @@ def validate(ctx: Ctx, layer_name: str | None, show_all: bool, limit: int) -> No
               "'implementedInterfaces'.")
 def check(ctx: Ctx, fix: bool) -> None:
     """Check the model for dangling, empty or incomplete references (run after edits)."""
-    res = ops.check(ctx.model, fix=fix)
+    res = integrity.check(ctx.model, fix=fix)
     if fix and res.get("fixed"):
         res["saved"] = ctx.save()
     emit(res)
