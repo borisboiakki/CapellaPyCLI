@@ -24,11 +24,14 @@ from . import physical as _physical
 from . import status as _status
 from . import structure as _structure
 from .model import (
+    CHAIN_TYPES,
     COMPONENT_TYPE,
     FUNCTION_TYPE,
     CapError,
     brief,
+    label,
     layer_key,
+    remove_xml,
     resolve,
     root_component,
     root_function,
@@ -226,7 +229,7 @@ def _allocation_slot(elem, target):
 def allocate(model, element: str, to: str, move: bool = False):
     elem, target = resolve(model, element), resolve(model, to)
     _same_layer(elem, target)
-    attr, label = _allocation_slot(elem, target)
+    attr, relation = _allocation_slot(elem, target)
     if elem in getattr(target, attr):
         return {"unchanged": True, "reason": "already allocated", "element": brief(elem), "to": brief(target)}
     previous = []
@@ -235,25 +238,24 @@ def allocate(model, element: str, to: str, move: bool = False):
         if owner is not None:
             if not move:
                 raise CapError(
-                    f"{brief(elem)} is already allocated to {brief(owner)}; "
+                    f"{label(elem)} is already allocated to {label(owner)}; "
                     "pass --move to re-allocate it"
                 )
             getattr(owner, attr).remove(elem)
             previous.append(brief(owner))
     getattr(target, attr).append(elem)
-    return {"allocated": label, "element": brief(elem), "to": brief(target), "removed_from": previous}
+    return {"allocated": relation, "element": brief(elem), "to": brief(target), "removed_from": previous}
 
 
 def unallocate(model, element: str, from_: str):
     elem, target = resolve(model, element), resolve(model, from_)
     attr, _ = _allocation_slot(elem, target)
     if elem not in getattr(target, attr):
-        raise CapError(f"{brief(elem)} is not allocated to {brief(target)}")
+        raise CapError(f"{label(elem)} is not allocated to {label(target)}")
     getattr(target, attr).remove(elem)
     return {"unallocated": brief(elem), "from": brief(target)}
 
 
-_CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
 
 
 def realize(model, element: str, realized: str):
@@ -263,7 +265,7 @@ def realize(model, element: str, realized: str):
         attr = "realized_functions"
     elif _is_component(elem) and _is_component(up):
         attr = "realized_components"
-    elif type_name(elem) in _CHAIN_TYPES and type_name(up) in _CHAIN_TYPES:
+    elif type_name(elem) in CHAIN_TYPES and type_name(up) in CHAIN_TYPES:
         attr = "realized_chains"
     elif _capabilities.is_capability(elem) and _capabilities.is_capability(up):
         attr = "realized_capabilities"
@@ -325,12 +327,11 @@ def unrealize(model, element: str, realized: str):
     elem, up = resolve(model, element), resolve(model, realized)
     links = _realization_links(elem, up)
     if not links:
-        raise CapError(f"{brief(elem)} does not realize {brief(up)}")
+        raise CapError(f"{label(elem)} does not realize {label(up)}")
     removed = []
     for link in links:
         removed.append({"uuid": link.get("id"), "type": _xtype(link)})
-        model._loader.idcache_remove(link)
-        elem._element.remove(link)
+        remove_xml(model, link)
     return {"element": brief(elem), "no_longer_realizes": brief(up), "removed": removed}
 
 
@@ -515,7 +516,7 @@ def delete(model, element: str, cascade: bool = False):
     obj = resolve(model, element)
     if layer_key(obj) is None or obj._element.getparent() is None:
         raise CapError("Refusing to delete a layer or model root")
-    key = layer_key(obj)
+    key = _require_layer(obj)
     layer_el = obj.layer._element
     if obj._element.getparent() is layer_el or obj in (
         root_function(model, key),
@@ -606,8 +607,7 @@ def delete(model, element: str, cascade: bool = False):
         if any(a in doomed for a in el.iterancestors()):
             continue
         removed.append({"uuid": el.get("id"), "type": _xtype(el), "name": el.get("name")})
-        model._loader.idcache_remove(el)
-        el.getparent().remove(el)
+        remove_xml(model, el)
 
     still_used = {ref for _, _, ref in iter_refs(model)}
     for pid in port_ids - ids - still_used:
@@ -619,8 +619,7 @@ def delete(model, element: str, cascade: bool = False):
             continue  # it still provides interfaces or carries items: keep it
         if _xtype(port).endswith("Port") and port.getparent() is not None:
             removed.append({"uuid": pid, "type": _xtype(port), "name": port.get("name")})
-            model._loader.idcache_remove(port)
-            port.getparent().remove(port)
+            remove_xml(model, port)
 
     removed_ids = ids | {r["uuid"] for r in removed}
     diagram_refs = {ref for _, _, ref in iter_refs(model, visual=True) if ref in removed_ids}
@@ -734,7 +733,7 @@ def check(model, fix: bool = False) -> dict[str, Any]:
 
 # --------------------------------------------------------------------- batch
 
-OPS: dict[str, Callable[..., dict[str, Any]]] = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-function": create_function,
     "create-component": create_component,
     "create-function-exchange": create_function_exchange,

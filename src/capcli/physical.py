@@ -18,6 +18,7 @@ everywhere):
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from itertools import pairwise
 from typing import Any
 
@@ -26,9 +27,12 @@ from .model import (
     add_xml_child,
     brief,
     cs_alias,
+    label,
+    remove_xml,
     require_layer,
     resolve,
     root_component,
+    toggle,
     type_name,
     with_status,
 )
@@ -48,7 +52,7 @@ def _node(obj):
     _component(obj, "a node component")
     if _nature(obj) != "NODE":
         raise CapError(
-            f"{brief(obj)} is a {_nature(obj).lower()} component; physical ports and links "
+            f"{label(obj)} is a {_nature(obj).lower()} component; physical ports and links "
             "belong to node components (create them with --nature node)"
         )
     return obj
@@ -57,7 +61,7 @@ def _node(obj):
 def _part(model, comp):
     parts = [p for p in model.search("Part", below=model.pa) if p.type == comp]
     if not parts:
-        raise CapError(f"{brief(comp)} has no Part; it must be placed in the structure first")
+        raise CapError(f"{label(comp)} has no Part; it must be placed in the structure first")
     return parts[0]
 
 
@@ -113,20 +117,19 @@ def deploy(model, element: str, host: str, remove: bool = False):
     if _nature(hst) != "NODE" and _nature(comp) == "NODE":
         raise CapError("A node component can only be deployed on another node, not on a behaviour component")
     if _nature(hst) not in ("NODE", "BEHAVIOR"):
-        raise CapError(f"{brief(hst)} has nature {_nature(hst)}; set it to node or behavior first")
+        raise CapError(f"{label(hst)} has nature {_nature(hst)}; set it to node or behavior first")
     hp, cp = _part(model, hst), _part(model, comp)
     links = [dl for dl in hp.deployment_links if dl.deployed_element == cp]
     if remove:
         if not links:
-            raise CapError(f"{brief(comp)} is not deployed on {brief(hst)}")
+            raise CapError(f"{label(comp)} is not deployed on {label(hst)}")
         for dl in links:
-            model._loader.idcache_remove(dl._element)
-            dl._element.getparent().remove(dl._element)
+            remove_xml(model, dl._element)
         return {"undeployed": brief(comp), "from": brief(hst)}
     if links:
         return {"unchanged": True, "reason": "already deployed there"}
     if _deployed_under(model, hst, comp):
-        raise CapError(f"{brief(hst)} is itself deployed on {brief(comp)} (directly or not): "
+        raise CapError(f"{label(hst)} is itself deployed on {label(comp)} (directly or not): "
                        "this deployment would create a cycle")
     hp.deployment_links.create("PartDeploymentLink", deployed_element=cp, location=hp)
     return {"deployed": brief(comp), "on": brief(hst)}
@@ -203,22 +206,14 @@ def category_links(model, category: str, links: list[str], remove: bool = False)
     cat = resolve(model, category)
     if type_name(cat) != "PhysicalLinkCategory":
         raise CapError(f"Expected a physical link category, got {type_name(cat)}")
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in links:
         lk = resolve(model, ref)
         if type_name(lk) != "PhysicalLink":
             raise CapError(f"Categories group physical links, not {type_name(lk)}")
-        present = lk in cat.links
-        if remove:
-            if not present:
-                raise CapError(f"{brief(lk)} is not in {brief(cat)}")
-            cat.links.remove(lk)
-            changed.append(brief(lk))
-        elif present:
-            unchanged.append(brief(lk))
-        else:
-            cat.links.append(lk)
-            changed.append(brief(lk))
+        done = toggle(cat.links, lk, remove, f"{label(lk)} is not in {label(cat)}")
+        (changed if done else unchanged).append(brief(lk))
     return {"category": brief(cat), "removed" if remove else "added": changed, "unchanged": unchanged}
 
 
@@ -347,7 +342,7 @@ def list_physical(model, what: str):
     return {"kind": what, "count": len(items), "items": items}
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-physical-port": create_port,
     "create-physical-link": create_link,
     "create-physical-path": create_path,

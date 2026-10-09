@@ -1249,7 +1249,8 @@ def main() -> None:
     except click.ClickException as e:
         # Usage errors keep the JSON contract and exit 1: exit 2 means
         # "`check` found problems", and agents must not confuse the two.
-        where = e.ctx.command_path if getattr(e, "ctx", None) else "capcli"
+        ctx = getattr(e, "ctx", None)
+        where = ctx.command_path if ctx is not None else "capcli"
         emit({"error": f"{e.format_message()} (see `{where} --help`)"})
         sys.exit(1)
     except click.Abort:

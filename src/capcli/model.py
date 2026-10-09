@@ -6,7 +6,7 @@ import os
 import pathlib
 import re
 import warnings
-from typing import Any
+from typing import Any, overload
 
 import capellambse
 
@@ -169,7 +169,12 @@ def type_name(obj) -> str:
     return type(obj).__name__
 
 
-def brief(obj) -> dict[str, Any] | None:
+@overload
+def brief(obj: None) -> None: ...
+@overload
+def brief(obj: Any) -> dict[str, Any]: ...
+def brief(obj):
+    """``{"uuid", "type", "name"}``: how every element appears in the JSON output."""
     if obj is None:
         return None
     d: dict[str, Any] = {"uuid": obj.uuid, "type": type_name(obj)}
@@ -177,6 +182,54 @@ def brief(obj) -> dict[str, Any] | None:
     if name is not None:
         d["name"] = name
     return d
+
+
+def label(obj) -> str:
+    """How an element appears in an error message: ``Interface 'INav' (8baf…)``."""
+    if obj is None:
+        return "nothing"
+    name = getattr(obj, "name", None)
+    return f"{type_name(obj)} {name!r} ({obj.uuid})" if name else f"{type_name(obj)} {obj.uuid}"
+
+
+# Functional chains are OperationalProcess in OA, FunctionalChain elsewhere.
+CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
+
+
+def toggle(lst, obj, remove: bool, missing: str) -> bool:
+    """Add ``obj`` to a reference list, or remove it with ``remove``.
+
+    Returns whether the list changed: adding what is there already is a
+    no-op (idempotent writes), removing what is not there is an error
+    (``missing`` says so), because it usually means a wrong UUID.
+    """
+    present = obj in lst
+    if remove:
+        if not present:
+            raise CapError(missing)
+        lst.remove(obj)
+        return True
+    if present:
+        return False
+    lst.append(obj)
+    return True
+
+
+def remove_xml(model, el) -> None:
+    """Remove an XML element from the model: id cache first, then the tree.
+
+    Both are needed: an element left in the id cache is still found by
+    ``by_uuid`` and breaks the next ``new_uuid``.
+    """
+    model._loader.idcache_remove(el)
+    el.getparent().remove(el)
+
+
+def remove_link(model, obj) -> dict[str, Any]:
+    """Remove a link element (involvement, allocation, …) and say what went."""
+    info = {"uuid": obj.uuid, "type": type_name(obj)}
+    remove_xml(model, obj._element)
+    return info
 
 
 def is_element(value) -> bool:
@@ -303,7 +356,7 @@ def same_layer(a, b) -> str:
     ka, kb = require_layer(a), require_layer(b)
     if ka != kb:
         raise CapError(
-            f"{brief(a)} is in {ka} but {brief(b)} is in {kb}; "
+            f"{label(a)} is in {ka} but {label(b)} is in {kb}; "
             "links between elements (exchanges, allocations, involvements, "
             "relations) must stay within one layer "
             "(use `realize` for cross-layer traceability)"
@@ -367,8 +420,7 @@ def set_constraint(model, owner, xml_attr: str, accessor: str, text: str | None)
     old = (owner._element.get(xml_attr) or "").rpartition("#")[2]
     for c in list(owner.constraints):
         if old and c.uuid == old:
-            model._loader.idcache_remove(c._element)
-            c._element.getparent().remove(c._element)
+            remove_xml(model, c._element)
     if xml_attr in owner._element.attrib:
         del owner._element.attrib[xml_attr]
     if text is None:

@@ -13,7 +13,10 @@ deletes the attribute.
 
 from __future__ import annotations
 
-from .model import NOT_SET, CapError, brief, layer, layer_key, resolve, status_name
+from collections.abc import Callable
+from typing import Any
+
+from .model import NOT_SET, CapError, brief, label, layer, layer_key, resolve, status_name
 
 PROGRESS_STATUS_TYPE = "ProgressStatus"
 
@@ -48,21 +51,22 @@ def set_status(model, value: str, elements: list[str]):
     clear = value.strip().upper() == NOT_SET
     lit = None if clear else _literal(model, value)
     objs = [resolve(model, ref) for ref in elements]
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for obj in objs:
         if not hasattr(type(obj), "status"):
-            raise CapError(f"{brief(obj)} has no status")
+            raise CapError(f"{label(obj)} has no status")
         before = status_name(obj)
-        after = NOT_SET if clear else lit.name
+        after = NOT_SET if lit is None else lit.name
         if before == after:
             unchanged.append(brief(obj))
             continue
-        if clear:
+        if lit is None:
             del obj.status
         else:
             obj.status = lit
         changed.append({**brief(obj), "from": before, "to": after})
-    return {"status": NOT_SET if clear else lit.name, "changed": changed, "unchanged": unchanged}
+    return {"status": NOT_SET if lit is None else lit.name, "changed": changed, "unchanged": unchanged}
 
 
 def list_by_status(model, value: str | None = None, layer_name: str | None = None):
@@ -88,4 +92,4 @@ def list_by_status(model, value: str | None = None, layer_name: str | None = Non
     return {"count": sum(len(v) for v in found.values()), "by_status": found}
 
 
-OPS = {"set-status": set_status}
+OPS: dict[str, Callable[..., Any]] = {"set-status": set_status}

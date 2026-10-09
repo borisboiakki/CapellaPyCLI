@@ -14,18 +14,23 @@ removes the links attached to it.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from itertools import pairwise
 from typing import Any
 
 from .model import (
+    CHAIN_TYPES,
     LAYERS,
     CapError,
     brief,
     constraint_text,
     endpoint_owner,
+    label,
     layer,
+    remove_link,
     resolve,
     root_function,
+    toggle,
     type_name,
     with_status,
 )
@@ -34,7 +39,6 @@ from .model import require_layer as _require_layer
 from .model import same_layer as _same_layer
 
 CHAIN_KINDS = ("SIMPLE", "COMPOSITE", "FRAGMENT")
-CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
 FN_INV = "FunctionalChainInvolvementFunction"
 LINK_INV = "FunctionalChainInvolvementLink"
 
@@ -78,14 +82,6 @@ def _fn_involvement(chain, fn, create: bool):
     return chain.involvements.create(FN_INV, involved=fn), True
 
 
-def _remove(model, obj) -> dict[str, Any]:
-    el = obj._element
-    info = {"uuid": obj.uuid, "type": type_name(obj)}
-    model._loader.idcache_remove(el)
-    el.getparent().remove(el)
-    return info
-
-
 def _exchanges_between(model, src, tgt):
     key = _require_layer(src)
     return [
@@ -101,7 +97,8 @@ def _exchanges_between(model, src, tgt):
 def add_to_chain(model, chain: str, elements: list[str]):
     """Involve functions and/or functional exchanges in a chain."""
     ch = _chain(model, chain)
-    added, unchanged = [], []
+    added: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         obj = resolve(model, ref)
         _same_layer(ch, obj)
@@ -145,20 +142,20 @@ def remove_from_chain(model, chain: str, elements: list[str]):
         if _is_function(obj):
             inv, _ = _fn_involvement(ch, obj, create=False)
             if inv is None:
-                raise CapError(f"{brief(obj)} is not part of chain {ch.uuid}")
+                raise CapError(f"{label(obj)} is not part of chain {ch.uuid}")
             for link in _link_involvements(ch):
                 if link.source == inv or link.target == inv:
                     gone.add(link.involved.uuid)
-                    removed.append({**_remove(model, link), "involved": brief(link.involved)})
-            removed.append({**_remove(model, inv), "involved": brief(obj)})
+                    removed.append({**remove_link(model, link), "involved": brief(link.involved)})
+            removed.append({**remove_link(model, inv), "involved": brief(obj)})
         else:
             links = [i for i in _link_involvements(ch) if i.involved == obj]
             if not links and obj.uuid in gone:
                 continue  # already removed with one of its functions
             if not links:
-                raise CapError(f"{brief(obj)} is not part of chain {ch.uuid}")
+                raise CapError(f"{label(obj)} is not part of chain {ch.uuid}")
             for link in links:
-                removed.append({**_remove(model, link), "involved": brief(obj)})
+                removed.append({**remove_link(model, link), "involved": brief(obj)})
     return {"chain": brief(ch), "removed": removed}
 
 
@@ -198,7 +195,7 @@ def create_chain(
         cands = _exchanges_between(model, a, b)
         if not cands:
             raise CapError(
-                f"No functional exchange from {brief(a)} to {brief(b)}; create one with "
+                f"No functional exchange from {label(a)} to {label(b)}; create one with "
                 "`capcli create function-exchange` first"
             )
         if len(cands) > 1:
@@ -230,27 +227,19 @@ def link_items(model, chain: str, exchange: str, elements: list[str], remove: bo
     ex = resolve(model, exchange)
     links = [i for i in _link_involvements(ch) if i.involved == ex]
     if not links:
-        raise CapError(f"{brief(ex)} is not part of chain {ch.uuid}; `chain add` it first")
+        raise CapError(f"{label(ex)} is not part of chain {ch.uuid}; `chain add` it first")
     link = links[0]
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         ei = resolve(model, ref)
         if type_name(ei) != "ExchangeItem":
             raise CapError(f"Chain links carry exchange items, not {type_name(ei)}")
         if LAYERS.index(_require_layer(ei)) > LAYERS.index(_require_layer(ch)):
-            raise CapError(f"{brief(ei)} is in a layer below the chain and is not visible from it; "
+            raise CapError(f"{label(ei)} is in a layer below the chain and is not visible from it; "
                            "use an exchange item of the same layer or a layer above")
-        present = ei in link.exchanged_items
-        if remove:
-            if not present:
-                raise CapError(f"{brief(ei)} is not carried on this chain link")
-            link.exchanged_items.remove(ei)
-            changed.append(brief(ei))
-        elif present:
-            unchanged.append(brief(ei))
-        else:
-            link.exchanged_items.append(ei)
-            changed.append(brief(ei))
+        done = toggle(link.exchanged_items, ei, remove, f"{label(ei)} is not carried on this chain link")
+        (changed if done else unchanged).append(brief(ei))
     out = {"chain": brief(ch), "exchange": brief(ex), "removed" if remove else "added": changed, "unchanged": unchanged}
     not_on_exchange = [x["name"] for x in changed if not remove and resolve(model, x["uuid"]) not in ex.exchanged_items]
     if not_on_exchange:
@@ -373,7 +362,7 @@ def _ordered(fns, edges):
     return out
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-chain": create_chain,
     "chain-add": add_to_chain,
     "chain-remove": remove_from_chain,

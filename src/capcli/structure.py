@@ -16,6 +16,7 @@ Both are handled here, and the Arcadia structure rules of ``ops.py``
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .model import (
@@ -249,7 +250,7 @@ def reorder(model, element: str, before: str | None = None, after: str | None = 
         anchor_el = siblings[0] if first else siblings[-1]
         place_before = first
     else:
-        anchor = resolve(model, before or after)
+        anchor = resolve(model, before or after or "")
         anchor_el = anchor._element
         if anchor_el.getparent() is not parent or anchor_el.tag != el.tag:
             raise CapError("--before/--after must name a sibling in the same list (same parent, same kind)")
@@ -298,7 +299,7 @@ def repair(model, apply: bool = True) -> dict[str, Any]:
     return {"fixed" if apply else "would_fix": moved, "needs_decision": manual}
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-package": create_package,
     "move": move,
     "reorder": reorder,

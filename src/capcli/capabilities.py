@@ -15,16 +15,20 @@ match what Capella writes.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .model import (
+    CHAIN_TYPES,
     COMPONENT_TYPE,
     CapError,
     brief,
     constraint_text,
     is_component,
     is_function,
+    label,
     layer,
+    remove_link,
     require_layer,
     resolve,
     same_layer,
@@ -39,7 +43,6 @@ CAPABILITY_TYPE = {
     "la": "CapabilityRealization",
     "pa": "CapabilityRealization",
 }
-CHAIN_TYPES = ("FunctionalChain", "OperationalProcess")
 
 # (containment attribute on the capability, link metaclass) per kind of
 # involved element. Actors are components with is_actor=True in SA/LA/PA and
@@ -71,14 +74,6 @@ def _capability(model, ref: str):
     if not is_capability(obj):
         raise CapError(f"Expected a capability, got {type_name(obj)} {obj.uuid}")
     return obj
-
-
-def _remove(model, link) -> dict[str, Any]:
-    el = link._element
-    info = {"uuid": link.uuid, "type": type_name(link)}
-    model._loader.idcache_remove(el)
-    el.getparent().remove(el)
-    return info
 
 
 def _slot(cap, obj):
@@ -147,7 +142,8 @@ def create_capability(
 def involve(model, capability: str, elements: list[str]):
     """Involve components/actors/entities, functions or chains in a capability."""
     cap = _capability(model, capability)
-    added, unchanged = [], []
+    added: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         obj = resolve(model, ref)
         same_layer(cap, obj)
@@ -168,8 +164,8 @@ def uninvolve(model, capability: str, elements: list[str]):
         attr, _, _ = _slot(cap, obj)
         links = [i for i in _links(cap, attr) if i.involved == obj]
         if not links:
-            raise CapError(f"{brief(obj)} is not involved in {brief(cap)}")
-        removed += [{**_remove(model, link), "involved": brief(obj)} for link in links]
+            raise CapError(f"{label(obj)} is not involved in {label(cap)}")
+        removed += [{**remove_link(model, link), "involved": brief(obj)} for link in links]
     return {"capability": brief(cap), "removed": removed}
 
 
@@ -185,8 +181,8 @@ def relate(model, relation: str, capability: str, other: str, remove: bool = Fal
     links = [i for i in getattr(cap, attr) if getattr(i, ref_attr) == oth]
     if remove:
         if not links:
-            raise CapError(f"{brief(cap)} does not {relation} {brief(oth)}")
-        return {"removed": [_remove(model, link) for link in links]}
+            raise CapError(f"{label(cap)} does not {relation} {label(oth)}")
+        return {"removed": [remove_link(model, link) for link in links]}
     if links:
         return {"unchanged": True, "reason": f"already {relation}s"}
     getattr(cap, attr).create(link_type, **{ref_attr: oth})
@@ -291,8 +287,8 @@ def mission_exploit(model, mission: str, capability: str, remove: bool = False):
     links = [x for x in mi.capability_exploitations if x.capability == cap]
     if remove:
         if not links:
-            raise CapError(f"{brief(mi)} does not exploit {brief(cap)}")
-        return {"removed": [_remove(model, x) for x in links]}
+            raise CapError(f"{label(mi)} does not exploit {label(cap)}")
+        return {"removed": [remove_link(model, x) for x in links]}
     if links:
         return {"unchanged": True, "reason": "already exploited"}
     mi.capability_exploitations.create("CapabilityExploitation", capability=cap)
@@ -309,8 +305,8 @@ def mission_involve(model, mission: str, elements: list[str], remove: bool = Fal
         links = [i for i in mi.involvements if i.involved == obj]
         if remove:
             if not links:
-                raise CapError(f"{brief(obj)} is not involved in {brief(mi)}")
-            changed += [_remove(model, x) for x in links]
+                raise CapError(f"{label(obj)} is not involved in {label(mi)}")
+            changed += [remove_link(model, x) for x in links]
         elif not links:
             mi.involvements.create("MissionInvolvement", involved=obj)
             changed.append(brief(obj))
@@ -327,7 +323,7 @@ def show_mission(model, mission: str):
     }, mi)
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-capability": create_capability,
     "capability-involve": involve,
     "capability-uninvolve": uninvolve,
