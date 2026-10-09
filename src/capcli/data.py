@@ -17,19 +17,22 @@ SA "Predefined Types" (Boolean, Integer, String, …), but not the reverse.
 from __future__ import annotations
 
 import re
-
+from collections.abc import Callable
 from typing import Any
 
 from .model import (
     LAYERS,
-    add_xml_child,
-    datavalue_alias,
     CapError,
+    add_xml_child,
     brief,
+    datavalue_alias,
+    label,
     layer,
     layer_key,
+    remove_xml,
     require_layer,
     resolve,
+    toggle,
     type_name,
     with_status,
 )
@@ -73,13 +76,13 @@ def _parent_pkg(model, layer_name: str | None, parent: str | None):
 def _check_type(element_layer: str, typ) -> None:
     if type_name(typ) not in TYPE_METACLASSES:
         raise CapError(
-            f"{brief(typ)} is not a data type; expected one of {', '.join(TYPE_METACLASSES)} "
+            f"{label(typ)} is not a data type; expected one of {', '.join(TYPE_METACLASSES)} "
             "(see `capcli data types`)"
         )
     tl = layer_key(typ)
     if tl is not None and LAYERS.index(tl) > LAYERS.index(element_layer):
         raise CapError(
-            f"{brief(typ)} is in {tl} and is not visible from {element_layer}: "
+            f"{label(typ)} is in {tl} and is not visible from {element_layer}: "
             "types can only come from the same layer or a layer above"
         )
 
@@ -107,8 +110,7 @@ def _set_cards(model, obj, min_card, max_card) -> str:
     alias = datavalue_alias(model, el)
     for tag, value in (("ownedMinCard", lo), ("ownedMaxCard", hi)):
         for old in el.findall(tag):
-            model._loader.idcache_remove(old)
-            el.remove(old)
+            remove_xml(model, old)
         add_xml_child(model, el, tag, f"{alias}:LiteralNumericValue", value=value)
     return f"{lo}..{hi}"
 
@@ -142,7 +144,7 @@ def add_property(model, cls: str, name: str, type: str, min: str = "1", max: str
     if kind not in KINDS:
         raise CapError(f"--kind must be one of {', '.join(KINDS)}")
     if any(p.name == name for p in owner.owned_properties):
-        raise CapError(f"{brief(owner)} already has a property named {name!r}")
+        raise CapError(f"{label(owner)} already has a property named {name!r}")
     # Capella writes union members as UnionProperty.
     metaclass = "UnionProperty" if type_name(owner) == "Union" else "Property"
     kw = {} if kind == "UNSET" else {"aggregation_kind": kind}
@@ -168,7 +170,7 @@ def _add_literals(enum, names: list[str]) -> list[str]:
     added = []
     for n in names:
         if n in existing:
-            raise CapError(f"{brief(enum)} already has a literal {n!r}")
+            raise CapError(f"{label(enum)} already has a literal {n!r}")
         lit = enum.owned_literals.create("EnumerationLiteral", name=n)
         # Capella writes the back-reference to the enumeration; capellambse doesn't.
         lit._element.set("abstractType", "#" + enum.uuid)
@@ -215,7 +217,8 @@ def assign(model, exchange_item: str, elements: list[str], remove: bool = False)
     ei = resolve(model, exchange_item)
     if type_name(ei) != "ExchangeItem":
         raise CapError(f"Expected an exchange item, got {type_name(ei)} {ei.uuid}")
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         carrier = resolve(model, ref)
         attr = CARRIER_ATTR.get(type_name(carrier))
@@ -226,18 +229,9 @@ def assign(model, exchange_item: str, elements: list[str], remove: bool = False)
             )
         cl, el = require_layer(carrier), require_layer(ei)
         if LAYERS.index(el) > LAYERS.index(cl):
-            raise CapError(f"{brief(ei)} is in {el} and is not visible from {cl}")
-        items = getattr(carrier, attr)
-        if remove:
-            if ei not in items:
-                raise CapError(f"{brief(carrier)} does not carry {brief(ei)}")
-            items.remove(ei)
-            changed.append(brief(carrier))
-        elif ei in items:
-            unchanged.append(brief(carrier))
-        else:
-            items.append(ei)
-            changed.append(brief(carrier))
+            raise CapError(f"{label(ei)} is in {el} and is not visible from {cl}")
+        done = toggle(getattr(carrier, attr), ei, remove, f"{label(carrier)} does not carry {label(ei)}")
+        (changed if done else unchanged).append(brief(carrier))
     return {"exchange_item": brief(ei), "removed_from" if remove else "assigned_to": changed, "unchanged": unchanged}
 
 
@@ -413,14 +407,13 @@ def generalize(model, element: str, super: str, remove: bool = False):
     if sub == sup:
         raise CapError("An element cannot specialize itself")
     if LAYERS.index(require_layer(sup)) > LAYERS.index(require_layer(sub)):
-        raise CapError(f"{brief(sup)} is in a layer below {brief(sub)} and is not visible from it")
+        raise CapError(f"{label(sup)} is in a layer below {label(sub)} and is not visible from it")
     links = [g for g in sub.generalizations if g.super == sup]
     if remove:
         if not links:
-            raise CapError(f"{brief(sub)} does not specialize {brief(sup)}")
+            raise CapError(f"{label(sub)} does not specialize {label(sup)}")
         for g in links:
-            model._loader.idcache_remove(g._element)
-            g._element.getparent().remove(g._element)
+            remove_xml(model, g._element)
         return {"element": brief(sub), "no_longer_specializes": brief(sup)}
     if links:
         return {"unchanged": True, "reason": "already specializes it"}
@@ -439,7 +432,7 @@ def _supers(obj, seen=None):
             yield from _supers(g.super, seen)
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-type": create_type,
     "create-union": create_union,
     "create-collection": create_collection,

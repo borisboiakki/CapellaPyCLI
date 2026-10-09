@@ -2,6 +2,8 @@ import json
 
 from lxml import etree
 
+from helpers import named
+
 PROGRESS = ["DRAFT", "TO_BE_REVIEWED", "TO_BE_DISCUSSED", "REWORK_NECESSARY", "UNDER_REWORK", "REVIEWED_OK"]
 EAT_FOOD = "3b83b4ba-671a-4de8-9c07-a5c6b1d3c422"  # OA capability with status TO_BE_DISCUSSED
 
@@ -60,15 +62,15 @@ def test_set_command_and_batch(run):
 
 
 def test_status_on_other_element_kinds(run):
-    comp = run("list", "la", "components")["items"][1]["uuid"]
-    ex = run("list", "la", "function-exchanges")["items"][0]["uuid"]
+    comp = named(run("list", "la", "components")["items"], "Campus")
+    ex = named(run("list", "la", "function-exchanges")["items"], "educate")
     run("status", "set", "TO_BE_REVIEWED", comp, ex)
     assert run("show", comp)["status"] == "TO_BE_REVIEWED"
     assert run("show", ex)["status"] == "TO_BE_REVIEWED"
 
 
 def test_status_in_dedicated_show_views(run):
-    chain = run("chain", "list", "sa")["items"][0]["uuid"]
+    chain = named(run("chain", "list", "sa")["items"], "Test Chain")
     mission = run("mission", "create", "--name", "M")["created"]["uuid"]
     run("status", "set", "DRAFT", chain, mission)
     assert run("show", chain)["status"] == "DRAFT"

@@ -18,19 +18,23 @@ of its own layer or of a layer above.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .model import (
     LAYERS,
     CapError,
     add_xml_child,
-    cs_alias,
     brief,
+    cs_alias,
     is_component,
+    label,
     layer,
     layer_key,
+    remove_xml,
     require_layer,
     resolve,
+    toggle,
     type_name,
     with_status,
 )
@@ -49,7 +53,7 @@ def _interface(model, ref):
 def _visible(user, iface) -> None:
     ku, ki = require_layer(user), require_layer(iface)
     if LAYERS.index(ki) > LAYERS.index(ku):
-        raise CapError(f"{brief(iface)} is in {ki} and is not visible from {ku}: "
+        raise CapError(f"{label(iface)} is in {ki} and is not visible from {ku}: "
                        "interfaces come from the same layer or a layer above")
 
 
@@ -61,11 +65,6 @@ def _children(obj, tag: str, attr: str, target_uuid: str | None = None):
             if target_uuid is None or ref.rpartition("#")[2] == target_uuid:
                 out.append(c)
     return out
-
-
-def _remove_el(model, el) -> None:
-    model._loader.idcache_remove(el)
-    el.getparent().remove(el)
 
 
 # ---------------------------------------------------------------- operations
@@ -90,24 +89,16 @@ def create_interface(model, name: str, layer_name: str | None = None, parent: st
 def set_items(model, interface: str, elements: list[str], remove: bool = False):
     """Exchange items an interface carries (ExchangeItemAllocation)."""
     iface = _interface(model, interface)
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         ei = resolve(model, ref)
         if type_name(ei) != "ExchangeItem":
             raise CapError(f"Interfaces carry exchange items, not {type_name(ei)}")
         if LAYERS.index(require_layer(ei)) > LAYERS.index(require_layer(iface)):
-            raise CapError(f"{brief(ei)} is in a layer below the interface and is not visible from it")
-        present = ei in iface.allocated_exchange_items
-        if remove:
-            if not present:
-                raise CapError(f"{brief(iface)} does not carry {brief(ei)}")
-            iface.allocated_exchange_items.remove(ei)
-            changed.append(brief(ei))
-        elif present:
-            unchanged.append(brief(ei))
-        else:
-            iface.allocated_exchange_items.append(ei)
-            changed.append(brief(ei))
+            raise CapError(f"{label(ei)} is in a layer below the interface and is not visible from it")
+        done = toggle(iface.allocated_exchange_items, ei, remove, f"{label(iface)} does not carry {label(ei)}")
+        (changed if done else unchanged).append(brief(ei))
     return {"interface": brief(iface), "removed" if remove else "added": changed, "unchanged": unchanged}
 
 
@@ -127,9 +118,9 @@ def provide(model, element: str, interface: str, remove: bool = False):
     links = _children(obj, "ownedInterfaceImplementations", IMPL_ATTR, iface.uuid)
     if remove:
         if not links:
-            raise CapError(f"{brief(obj)} does not implement {brief(iface)}")
+            raise CapError(f"{label(obj)} does not implement {label(iface)}")
         for el in links:
-            _remove_el(model, el)
+            remove_xml(model, el)
         return {"element": brief(obj), "no_longer_provides": brief(iface)}
     if links:
         return {"unchanged": True, "reason": "already provided"}
@@ -148,7 +139,7 @@ def require(model, element: str, interface: str, remove: bool = False):
     present = iface in obj.used_interfaces
     if remove:
         if not present:
-            raise CapError(f"{brief(obj)} does not use {brief(iface)}")
+            raise CapError(f"{label(obj)} does not use {label(iface)}")
         obj.used_interfaces.remove(iface)
         return {"element": brief(obj), "no_longer_requires": brief(iface)}
     if present:
@@ -162,7 +153,7 @@ def _port_link(port, iface, attr: str, remove: bool):
     verb = "provides" if attr == "provided_interfaces" else "requires"
     if remove:
         if iface not in lst:
-            raise CapError(f"{brief(port)} does not {verb[:-1]} {brief(iface)}")
+            raise CapError(f"{label(port)} does not {verb[:-1]} {label(iface)}")
         lst.remove(iface)
         return {"element": brief(port), f"no_longer_{verb}": brief(iface)}
     if iface in lst:
@@ -181,13 +172,13 @@ def allocate_interface(model, element: str, interface: str, remove: bool = False
     _visible(obj, iface)
     links = _children(obj, "ownedInterfaceAllocations", "targetElement", iface.uuid)
     if not remove and not links and type_name(obj) == "Interface" and obj in _allocated_closure(model, iface):
-        raise CapError(f"{brief(iface)} already allocates {brief(obj)} (directly or not): "
+        raise CapError(f"{label(iface)} already allocates {label(obj)} (directly or not): "
                        "this allocation would create a cycle")
     if remove:
         if not links:
-            raise CapError(f"{brief(iface)} is not allocated to {brief(obj)}")
+            raise CapError(f"{label(iface)} is not allocated to {label(obj)}")
         for el in links:
-            _remove_el(model, el)
+            remove_xml(model, el)
         return {"element": brief(obj), "no_longer_allocates": brief(iface)}
     if links:
         return {"unchanged": True, "reason": "already allocated"}
@@ -272,7 +263,7 @@ def bad_implementations(model, fix: bool = False) -> list[dict[str, Any]]:
     return out
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-interface": create_interface,
     "interface-items": set_items,
     "provide-interface": provide,

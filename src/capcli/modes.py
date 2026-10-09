@@ -17,21 +17,24 @@ region holds either modes or states, never both.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from .model import (
-    XSI_TYPE,
     LAYERS,
+    XSI_TYPE,
     CapError,
-    constraint_text,
-    set_constraint,
     brief,
+    constraint_text,
     is_component,
     is_function,
+    label,
     layer,
     require_layer,
     resolve,
     same_layer,
+    set_constraint,
+    toggle,
     type_name,
     with_status,
 )
@@ -205,7 +208,7 @@ def add_transition(model, source: str, target: str, triggers: list[str] | None =
             raise CapError(f"Triggers are {', '.join(TRIGGER_TYPES)}, not {type_name(ev)}")
         if type_name(ev) == "ExchangeItem":  # items may come from a layer above
             if LAYERS.index(require_layer(ev)) > LAYERS.index(require_layer(src)):
-                raise CapError(f"{brief(ev)} is in a layer below and is not visible from this state machine")
+                raise CapError(f"{label(ev)} is in a layer below and is not visible from this state machine")
         else:
             same_layer(src, ev)
         if ev not in tr.triggers:  # a reference list never holds the same element twice
@@ -240,7 +243,7 @@ def set_activities(model, state: str, entry: list[str] | None = None, exit: list
             same_layer(st, fn)
             if remove:
                 if fn not in lst:
-                    raise CapError(f"{brief(fn)} is not a {key} activity of {brief(st)}")
+                    raise CapError(f"{label(fn)} is not a {key} activity of {label(st)}")
                 lst.remove(fn)
             elif fn in lst:
                 continue
@@ -266,23 +269,15 @@ def set_available(model, state: str, elements: list[str], remove: bool = False):
     st = resolve(model, state)
     if type_name(st) not in HOLDERS:
         raise CapError(f"Elements are available in states or modes, not {type_name(st)}")
-    changed, unchanged = [], []
+    changed: list[dict[str, Any]] = []
+    unchanged: list[dict[str, Any]] = []
     for ref in elements:
         obj = resolve(model, ref)
         if not (is_function(obj) or type_name(obj) in AVAILABLE_TYPES):
             raise CapError(f"Only functions, chains and capabilities have available states, not {type_name(obj)}")
         same_layer(st, obj)
-        lst = obj.available_in_states
-        if remove:
-            if st not in lst:
-                raise CapError(f"{brief(obj)} is not available in {brief(st)}")
-            lst.remove(st)
-            changed.append(brief(obj))
-        elif st in lst:
-            unchanged.append(brief(obj))
-        else:
-            lst.append(st)
-            changed.append(brief(obj))
+        done = toggle(obj.available_in_states, st, remove, f"{label(obj)} is not available in {label(st)}")
+        (changed if done else unchanged).append(brief(obj))
     return {"state": brief(st), "removed" if remove else "available": changed, "unchanged": unchanged}
 
 
@@ -377,7 +372,7 @@ def list_machines(model, layer_name: str):
     return {"layer": layer_name, "count": len(items), "items": items}
 
 
-OPS = {
+OPS: dict[str, Callable[..., Any]] = {
     "create-state-machine": create_machine,
     "add-state": add_state,
     "add-transition": add_transition,

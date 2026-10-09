@@ -11,24 +11,40 @@ metadata:
 
 <!-- Copy this folder to `.opencode/skills/capella-model/` in the repository
      that holds the model (OpenCode also finds it under `.claude/skills/` and
-     `.agents/skills/`). Adjust the values in "Project settings". -->
+     `.agents/skills/`). Nothing project-specific is hardcoded: the agent asks
+     for the model and the perspectives to work on (see "Session setup").
+     Adjust the naming conventions if your project uses others. -->
 
 The system model is a Capella project. **Read and change it only through the
 `capcli` command.** Never edit `.capella`, `.aird` or `.afm` files by hand, or
 with sed or search-and-replace: elements are linked by UUID cross-references,
 and a text edit silently breaks them.
 
-## Project settings (ADJUST)
+## Session setup: ask before the first command
 
-| Setting | Value |
+Don't assume which model or which part of it to work on. Once per session,
+before the first capcli command, settle these two points with the user. Skip
+a question when the user, `CAPELLA_MODEL` or the repository's `AGENTS.md`
+already answers it, and just confirm the answer in one line.
+
+1. **Which model.** List the candidates with `find . -name "*.aird" -not -path "*/.*"`
+   and ask which one to use; if there is none, or it lives elsewhere, ask for
+   the path to its `.aird` file. Check it with `capcli -m <path> info` and
+   show the user its name and layers. Then use it in every command:
+   `export CAPELLA_MODEL=<path>`, or `capcli -m <path> …`.
+2. **Which Capella perspectives.** Ask which architecture levels you may
+   change: Operational Analysis (`oa`), System Analysis (`sa`), Logical
+   Architecture (`la`), Physical Architecture (`pa`). You may read every
+   level; only change the ones the user named, and ask before touching
+   another.
+
+Naming conventions (ADJUST if your project uses others):
+
+| Element | Convention |
 |---|---|
-| Model | `model/MyModel.aird` (`export CAPELLA_MODEL=model/MyModel.aird`) |
-| Layers you may modify | `sa`, `la` (only read `oa` and `pa` unless asked) |
 | Functions | verb + object, lower case: "compute route" |
 | Components | noun phrase, Title Case: "Navigation Unit" |
 | Exchanges | the data or item conveyed: "position", "route request" |
-
-If `CAPELLA_MODEL` isn't set, capcli uses the only `.aird` under the current directory.
 
 ## Arcadia structure rules
 
@@ -45,6 +61,7 @@ the model:
 ## Workflow
 
 1. **Before writing:**
+   - Make sure the session setup is done (model and perspectives).
    - Make sure Capella is closed. If you are unsure, ask the user, because an
      open Capella overwrites your changes.
    - Check that you're on a git branch and the model is committed (`git status`).

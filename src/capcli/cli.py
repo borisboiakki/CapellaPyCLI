@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, interfaces, modes, ops, physical, status, structure
+from . import __version__, capabilities, chains, data, integrity, interfaces, modes, ops, physical, status, structure
 from .model import (
     LAYERS,
     CapError,
@@ -88,6 +88,29 @@ def write_command(fn):
         # Nothing changed: don't rewrite the files (Capella would see them as modified).
         saved = False if result.get("unchanged") is True else ctx.save()
         emit({**result, "saved": saved, **({"dry_run": True} if ctx.dry_run else {})})
+
+    return wrapper
+
+
+def in_package(kind: str):
+    """The --layer / --parent pair of create commands that put elements in a package."""
+
+    def deco(fn):
+        fn = click.option("--parent", help=f"{kind.capitalize()} package UUID (instead of --layer).")(fn)
+        return click.option("--layer", "layer_name", type=click.Choice(LAYERS),
+                            help=f"Create in the layer's {kind} package.")(fn)
+
+    return deco
+
+
+def read_command(fn):
+    """Decorator for commands that only read: the function returns the JSON."""
+
+    @functools.wraps(fn)
+    @click.pass_obj
+    @handled
+    def wrapper(ctx: Ctx, *a, **kw):
+        emit(fn(ctx.model, *a, **kw))
 
     return wrapper
 
@@ -169,36 +192,30 @@ def list_(ctx: Ctx, layer_name: str, kind: str | None, name_filter: str | None, 
     emit({"layer": layer_name, "kind": kind, "count": len(items), "items": out})
 
 
+# Element kinds with a dedicated view (and an `issues` list); first match wins.
+SHOW_VIEWS = [
+    (chains.is_chain, chains.show_chain),
+    (capabilities.is_capability, capabilities.show_capability),
+    (lambda o: type_name(o) == "Interface", interfaces.show),
+    (physical.is_physical_element, physical.show),
+    (modes.is_mode_element, modes.show),
+    (data.is_data_element, data.show),
+    (lambda o: type_name(o) == "Mission", capabilities.show_mission),
+]
+
+
 @cli.command()
 @click.argument("uuid")
 @click.option("--attr", "attrs", multiple=True, help="Only return these attributes (repeatable).")
-@click.pass_obj
-@handled
-def show(ctx: Ctx, uuid: str, attrs: tuple[str, ...]) -> None:
+@read_command
+def show(model, uuid: str, attrs: tuple[str, ...]):
     """Show an element with its main relations (or selected attributes)."""
-    obj = resolve(ctx.model, uuid)
-    if chains.is_chain(obj) and not attrs:
-        emit(chains.show_chain(ctx.model, uuid))
-        return
-    if capabilities.is_capability(obj) and not attrs:
-        emit(capabilities.show_capability(ctx.model, uuid))
-        return
-    if type_name(obj) == "Interface" and not attrs:
-        emit(interfaces.show(ctx.model, uuid))
-        return
-    if physical.is_physical_element(obj) and not attrs:
-        emit(physical.show(ctx.model, uuid))
-        return
-    if modes.is_mode_element(obj) and not attrs:
-        emit(modes.show(ctx.model, uuid))
-        return
-    if data.is_data_element(obj) and not attrs:
-        emit(data.show(ctx.model, uuid))
-        return
-    if type_name(obj) == "Mission" and not attrs:
-        emit(capabilities.show_mission(ctx.model, uuid))
-        return
-    emit(detail(obj, list(attrs) or None))
+    obj = resolve(model, uuid)
+    if not attrs:
+        for applies, view in SHOW_VIEWS:
+            if applies(obj):
+                return view(model, uuid)
+    return detail(obj, list(attrs) or None)
 
 
 @cli.command()
@@ -318,7 +335,7 @@ def validate(ctx: Ctx, layer_name: str | None, show_all: bool, limit: int) -> No
               "'implementedInterfaces'.")
 def check(ctx: Ctx, fix: bool) -> None:
     """Check the model for dangling, empty or incomplete references (run after edits)."""
-    res = ops.check(ctx.model, fix=fix)
+    res = integrity.check(ctx.model, fix=fix)
     if fix and res.get("fixed"):
         res["saved"] = ctx.save()
     emit(res)
@@ -504,11 +521,10 @@ def chain_list(ctx: Ctx, layer_name: str, involving: str | None) -> None:
 
 @chain.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def chain_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def chain_show(model, uuid: str):
     """Show a chain as ordered steps, with entry/exit functions and issues."""
-    emit(chains.show_chain(ctx.model, uuid))
+    return chains.show_chain(model, uuid)
 
 
 @chain.command("create")
@@ -611,17 +627,15 @@ def capability_list(ctx: Ctx, layer_name: str, involving: str | None) -> None:
 
 @capability.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def capability_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def capability_show(model, uuid: str):
     """Show involvements, realizations, relations, missions and issues."""
-    emit(capabilities.show_capability(ctx.model, uuid))
+    return capabilities.show_capability(model, uuid)
 
 
 @capability.command("create")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS), help="Create in the layer's capability package.")
-@click.option("--parent", help="Capability package UUID (instead of --layer).")
+@in_package("capability")
 @click.option("--description")
 @write_command
 def capability_create(model, name, layer_name, parent, description):
@@ -684,20 +698,18 @@ def data_group() -> None:
 @data_group.command("types")
 @click.option("--layer", "layer_name", type=click.Choice(LAYERS), required=True)
 @click.option("--name", "name_filter", help="Case-insensitive substring filter.")
-@click.pass_obj
-@handled
-def data_types(ctx: Ctx, layer_name: str, name_filter: str | None) -> None:
+@read_command
+def data_types(model, layer_name: str, name_filter: str | None):
     """Types usable from LAYER: its own, the layers above, and the predefined ones."""
-    emit(data.types(ctx.model, layer_name, name_filter))
+    return data.types(model, layer_name, name_filter)
 
 
 @data_group.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def data_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def data_show(model, uuid: str):
     """Show a class, enumeration, exchange item or data type with its usage and issues."""
-    emit(data.show(ctx.model, uuid))
+    return data.show(model, uuid)
 
 
 @data_group.group("class")
@@ -707,8 +719,7 @@ def data_class() -> None:
 
 @data_class.command("create")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS), help="Create in the layer's data package.")
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--description")
 @write_command
 def data_class_create(model, name, layer_name, parent, description):
@@ -719,8 +730,7 @@ def data_class_create(model, name, layer_name, parent, description):
 @data_group.command("type")
 @click.option("--name", required=True)
 @click.option("--kind", required=True, type=click.Choice(list(data.BASIC_KINDS), case_sensitive=False))
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--description")
 @write_command
 def data_type(model, name, kind, layer_name, parent, description):
@@ -730,8 +740,7 @@ def data_type(model, name, kind, layer_name, parent, description):
 
 @data_group.command("union")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--description")
 @write_command
 def data_union(model, name, layer_name, parent, description):
@@ -742,8 +751,7 @@ def data_union(model, name, layer_name, parent, description):
 @data_group.command("collection")
 @click.option("--name", required=True)
 @click.option("--type", "type_", required=True, help="Item type UUID.")
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--min", "min_", default="0", show_default=True)
 @click.option("--max", "max_", default="*", show_default=True)
 @click.option("--description")
@@ -790,8 +798,7 @@ def data_enum() -> None:
 
 @data_enum.command("create")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--literal", "literals", multiple=True, help="Literal name (repeatable, in order).")
 @click.option("--description")
 @write_command
@@ -816,8 +823,7 @@ def data_exchange_item() -> None:
 
 @data_exchange_item.command("create")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Data package UUID (instead of --layer).")
+@in_package("data")
 @click.option("--mechanism", type=click.Choice(["unset", "flow", "operation", "event", "shared_data"], case_sensitive=False),
               default="unset", show_default=True)
 @click.option("--description")
@@ -856,20 +862,18 @@ def mode_group() -> None:
 
 @mode_group.command("list")
 @click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
-@click.pass_obj
-@handled
-def mode_list(ctx: Ctx, layer_name: str) -> None:
+@read_command
+def mode_list(model, layer_name: str):
     """List the state machines of a layer with their owner."""
-    emit(modes.list_machines(ctx.model, layer_name))
+    return modes.list_machines(model, layer_name)
 
 
 @mode_group.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def mode_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def mode_show(model, uuid: str):
     """Show a state machine (tree of regions, states, transitions) or a state."""
-    emit(modes.show(ctx.model, uuid))
+    return modes.show(model, uuid)
 
 
 @mode_group.group("machine")
@@ -941,20 +945,18 @@ def pa_group() -> None:
 
 @pa_group.command("list")
 @click.argument("what", type=click.Choice(["nodes", "behaviors", "links", "paths"]))
-@click.pass_obj
-@handled
-def pa_list(ctx: Ctx, what: str) -> None:
+@read_command
+def pa_list(model, what: str):
     """List node or behaviour components (with their host), links or paths."""
-    emit(physical.list_physical(ctx.model, what))
+    return physical.list_physical(model, what)
 
 
 @pa_group.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def pa_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def pa_show(model, uuid: str):
     """Show a physical component, port, link or path with deployment and issues."""
-    emit(physical.show(ctx.model, uuid))
+    return physical.show(model, uuid)
 
 
 @pa_group.command("port")
@@ -1022,26 +1024,23 @@ def interface_group() -> None:
 
 @interface_group.command("list")
 @click.argument("layer_name", metavar="LAYER", type=click.Choice(LAYERS))
-@click.pass_obj
-@handled
-def interface_list(ctx: Ctx, layer_name: str) -> None:
+@read_command
+def interface_list(model, layer_name: str):
     """List the interfaces of a layer."""
-    emit(interfaces.list_interfaces(ctx.model, layer_name))
+    return interfaces.list_interfaces(model, layer_name)
 
 
 @interface_group.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def interface_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def interface_show(model, uuid: str):
     """Show an interface: items, providers, requirers, allocations, issues."""
-    emit(interfaces.show(ctx.model, uuid))
+    return interfaces.show(model, uuid)
 
 
 @interface_group.command("create")
 @click.option("--name", required=True)
-@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.option("--parent", help="Interface package UUID (instead of --layer).")
+@in_package("interface")
 @click.option("--description")
 @write_command
 def interface_create(model, name, layer_name, parent, description):
@@ -1142,11 +1141,10 @@ def status_group() -> None:
 
 
 @status_group.command("values")
-@click.pass_obj
-@handled
-def status_values(ctx: Ctx) -> None:
+@read_command
+def status_values(model):
     """List the status values defined in the project."""
-    emit({"values": status.values(ctx.model), "clear_with": status.NOT_SET})
+    return {"values": status.values(model), "clear_with": status.NOT_SET}
 
 
 @status_group.command("set")
@@ -1161,11 +1159,10 @@ def status_set(model, value, elements):
 @status_group.command("list")
 @click.argument("value", required=False)
 @click.option("--layer", "layer_name", type=click.Choice(LAYERS))
-@click.pass_obj
-@handled
-def status_list(ctx: Ctx, value: str | None, layer_name: str | None) -> None:
+@read_command
+def status_list(model, value: str | None, layer_name: str | None):
     """List elements that have a status, grouped by value (optionally only VALUE)."""
-    emit(status.list_by_status(ctx.model, value, layer_name))
+    return status.list_by_status(model, value, layer_name)
 
 
 @cli.group()
@@ -1184,11 +1181,10 @@ def mission_create(model, name, description):
 
 @mission.command("show")
 @click.argument("uuid")
-@click.pass_obj
-@handled
-def mission_show(ctx: Ctx, uuid: str) -> None:
+@read_command
+def mission_show(model, uuid: str):
     """Show the capabilities a mission exploits and the actors it involves."""
-    emit(capabilities.show_mission(ctx.model, uuid))
+    return capabilities.show_mission(model, uuid)
 
 
 @mission.command("exploit")
@@ -1249,7 +1245,8 @@ def main() -> None:
     except click.ClickException as e:
         # Usage errors keep the JSON contract and exit 1: exit 2 means
         # "`check` found problems", and agents must not confuse the two.
-        where = e.ctx.command_path if getattr(e, "ctx", None) else "capcli"
+        ctx = getattr(e, "ctx", None)
+        where = ctx.command_path if ctx is not None else "capcli"
         emit({"error": f"{e.format_message()} (see `{where} --help`)"})
         sys.exit(1)
     except click.Abort:

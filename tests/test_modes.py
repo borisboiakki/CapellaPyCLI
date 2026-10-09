@@ -2,24 +2,12 @@ import json
 
 import capellambse
 
-from lxml import etree
-
-
-def _xml(model):
-    return etree.parse(str(model / "Model Test 7.0.capella"))
-
-
-def _el(tree, uuid):
-    return next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("id") == uuid)
-
-
-def _ids(v):
-    return sorted(t[1:] for t in (v or "").split())
+from helpers import by_id, capella_xml, named, ref_ids
 
 
 def _build(run):
     fn = run("create", "function", "--parent", "sa:root-function", "--name", "power up")["created"]["uuid"]
-    fe = run("list", "sa", "function-exchanges")["items"][0]["uuid"]
+    fe = named(run("list", "sa", "function-exchanges")["items"], "Test fex")
     res = run("batch", input=json.dumps([
         {"op": "create-state-machine", "as": "sm", "owner": "sa:root-component"},
         {"op": "add-state", "as": "init", "parent": "$sm", "name": "start", "kind": "initial"},
@@ -69,14 +57,14 @@ def test_build_machine_and_read_back(run):
 
 def test_xml_caches_and_guard_match_capella(run, model):
     ids = _build(run)
-    tree = _xml(model)
-    on = _el(tree, ids["on"])
+    tree = capella_xml(model)
+    on = by_id(tree, ids["on"])
     region = on.getparent()
-    assert _ids(region.get("involvedStates")) == sorted([ids["init"], ids["off"], ids["on"]])
-    assert _ids(on.get("referencedStates")) == sorted([ids["idle"], ids["busy"]])
-    assert [r.get("name") for r in _el(tree, ids["off"]) if r.tag == "ownedRegions"] == ["region"]
+    assert ref_ids(region.get("involvedStates")) == sorted([ids["init"], ids["off"], ids["on"]])
+    assert ref_ids(on.get("referencedStates")) == sorted([ids["idle"], ids["busy"]])
+    assert [r.get("name") for r in by_id(tree, ids["off"]) if r.tag == "ownedRegions"] == ["region"]
     tr = next(e for e in region if e.tag == "ownedTransitions" and e.get("guard"))
-    spec = _el(tree, tr.get("guard")[1:]).find("ownedSpecification")
+    spec = by_id(tree, tr.get("guard")[1:]).find("ownedSpecification")
     assert spec.get("{http://www.w3.org/2001/XMLSchema-instance}type").endswith(":OpaqueExpression")
     assert (spec.find("bodies").text, spec.find("languages").text) == ("power > 10", "capella:linkedText")
 
@@ -91,10 +79,10 @@ def test_rules(run):
     ]:
         data, code = run(*args, ok=False)
         assert code == 1 and needle in data["error"], data
-    la_fn = run("list", "la", "functions")["items"][1]["uuid"]
+    la_fn = named(run("list", "la", "functions")["items"], "manage the school")
     data, code = run("mode", "available", ids["on"], la_fn, ok=False)
     assert code == 1 and "one layer" in data["error"]
-    other = run("mode", "list", "la")["items"][0]["uuid"]
+    other = named(run("mode", "list", "la")["items"], "FaultStates")
     other_state = run("mode", "show", other)["regions"][0]["states"][0]["uuid"]
     data, code = run("mode", "transition", ids["off"], other_state, ok=False)
     assert code == 1
@@ -133,8 +121,8 @@ def test_delete_effect_function_keeps_transition(run):
 def test_check_detects_and_fixes_stale_caches(run, model):
     ids = _build(run)
     path = model / "Model Test 7.0.capella"
-    tree = _xml(model)
-    del _el(tree, ids["on"]).getparent().attrib["involvedStates"]
+    tree = capella_xml(model)
+    del by_id(tree, ids["on"]).getparent().attrib["involvedStates"]
     tree.write(str(path), xml_declaration=True, encoding="UTF-8")
     data, code = run("check", ok=False)
     assert code == 2 and data["state_caches"]
@@ -148,7 +136,7 @@ def test_activities_and_new_pseudo_states(run, model):
     assert run("mode", "activity", ids["on"], "--entry", ids["fn"])["unchanged"]
     shown = run("show", ids["on"])
     assert [f["uuid"] for f in shown["entry"]] == [ids["fn"]] and [f["uuid"] for f in shown["do"]] == [ids["fn"]]
-    el = _el(_xml(model), ids["on"])
+    el = by_id(capella_xml(model), ids["on"])
     assert (el.get("entry"), el.get("doActivity")) == ("#" + ids["fn"], "#" + ids["fn"])
     run("mode", "activity", ids["on"], "--do", ids["fn"], "--remove")
     assert "do" not in run("show", ids["on"])
@@ -182,10 +170,10 @@ def test_state_and_transition_realization(run, model):
                 if t["from"]["uuid"] == ids["off"] and t["to"]["uuid"] == ids["on"])
     run("realize", la["t"], sa_t)
     assert [x["uuid"] for x in run("show", la["on"])["realizes"]] == [ids["on"]]
-    tree = _xml(model)
-    sr = _el(tree, la["on"]).find("ownedAbstractStateRealizations")
+    tree = capella_xml(model)
+    sr = by_id(tree, la["on"]).find("ownedAbstractStateRealizations")
     assert (sr.get("targetElement"), sr.get("sourceElement")) == ("#" + ids["on"], "#" + la["on"])
-    tr = _el(tree, la["t"]).find("ownedStateTransitionRealizations")
+    tr = by_id(tree, la["t"]).find("ownedStateTransitionRealizations")
     assert (tr.get("targetElement"), tr.get("sourceElement")) == ("#" + sa_t, "#" + la["t"])
     data, code = run("realize", la["on"], sa_t, ok=False)  # a state can't realize a transition
     assert code == 1
@@ -195,7 +183,7 @@ def test_state_and_transition_realization(run, model):
 
 def test_duplicate_triggers_and_effects_are_written_once(run, model):
     fn = run("create", "function", "--parent", "sa:root-function", "--name", "twice")["created"]["uuid"]
-    fe = run("list", "sa", "function-exchanges")["items"][0]["uuid"]
+    fe = named(run("list", "sa", "function-exchanges")["items"], "Test fex")
     res = run("batch", input=json.dumps([
         {"op": "create-state-machine", "as": "sm", "owner": "sa:root-component"},
         {"op": "add-state", "as": "a", "parent": "$sm", "name": "A"},
@@ -204,8 +192,8 @@ def test_duplicate_triggers_and_effects_are_written_once(run, model):
          "effects": [fn, fn], "triggers": [fe, fe]},
     ]))
     t = next(s["created"]["uuid"] for s in res["steps"] if s.get("as") == "t")
-    el = _el(_xml(model), t)
-    assert (_ids(el.get("effect")), _ids(el.get("triggers"))) == ([fn], [fe])
+    el = by_id(capella_xml(model), t)
+    assert (ref_ids(el.get("effect")), ref_ids(el.get("triggers"))) == ([fn], [fe])
     run("delete", fn, "--cascade")  # used to crash on the second copy
     assert run("check")["ok"]
 

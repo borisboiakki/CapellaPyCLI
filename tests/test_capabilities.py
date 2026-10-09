@@ -1,18 +1,10 @@
 import json
 
-from lxml import etree
+from helpers import capella_xml, created_ids, named
 
 SA_CAP = "9390b7d5-598a-42db-bef8-23677e45ba06"  # "Capability"
 SYSTEM = "230c4621-7e0a-4d0a-9db2-d4ba5e97b3df"
 STAY_ALIVE = "83d1334f-6180-46c4-a80d-6839341df688"  # OA capability
-
-
-def _ids(res):
-    return {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
-
-
-def _capella_xml(model):
-    return etree.parse(str(model / "Model Test 7.0.capella"))
 
 
 def test_read_existing_capability(run):
@@ -39,7 +31,7 @@ def test_involve_uninvolve_and_issues(run):
         {"op": "create-function", "as": "f", "parent": "sa:root-function", "name": "compute route"},
         {"op": "capability-involve", "capability": "$c", "elements": ["$f", SYSTEM]},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     shown = run("capability", "show", ids["c"])
     assert [f["uuid"] for f in shown["involves"]["functions"]] == [ids["f"]]
     assert [c["uuid"] for c in shown["involves"]["components"]] == [SYSTEM]
@@ -48,7 +40,7 @@ def test_involve_uninvolve_and_issues(run):
     assert run("capability", "list", "sa", "--involving", ids["f"])["count"] == 1
 
     # A logical component cannot be involved in a system capability.
-    lc = run("list", "la", "components")["items"][1]["uuid"]
+    lc = named(run("list", "la", "components")["items"], "Campus")
     data, code = run("capability", "involve", ids["c"], lc, ok=False)
     assert code == 1 and "one layer" in data["error"]
 
@@ -66,13 +58,13 @@ def test_function_allocated_outside_capability_is_reported(run):
         {"op": "allocate", "element": "$f", "to": "$k"},
         {"op": "capability-involve", "capability": "$c", "elements": ["$f"]},
     ]))
-    issues = run("capability", "show", _ids(res)["c"])["issues"]
+    issues = run("capability", "show", created_ids(res)["c"])["issues"]
     assert any("allocated to 'K'" in i for i in issues)
 
 
 def test_pa_component_involvement_reads_back(run):
     cap = run("capability", "create", "--layer", "pa", "--name", "P")["created"]["uuid"]
-    pc = run("list", "pa", "components")["items"][1]["uuid"]
+    pc = named(run("list", "pa", "components")["items"], "PC 1")
     run("capability", "involve", cap, pc)
     assert [c["uuid"] for c in run("capability", "show", cap)["involves"]["components"]] == [pc]
 
@@ -86,14 +78,14 @@ def test_realization_chain_writes_source_element(run, model):
         {"op": "create-capability", "as": "p", "layer": "pa", "name": "P"},
         {"op": "realize", "element": "$p", "realized": "$l"},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     assert run("capability", "show", ids["l"])["realizes"][0]["uuid"] == ids["s"]
     assert run("capability", "show", ids["l"])["realized_by"][0]["uuid"] == ids["p"]
     assert ids["s"] in {c["uuid"] for c in run("show", STAY_ALIVE)["realized_by"]}
 
     # Capella always writes both ends of a realization; so must we.
     links = [
-        el for el in _capella_xml(model).iter()
+        el for el in capella_xml(model).iter()
         if isinstance(el.tag, str) and el.get("targetElement") in {f"#{ids['l']}", f"#{ids['s']}", f"#{STAY_ALIVE}"}
         and el.getparent().get("id") in ids.values()
     ]
@@ -111,15 +103,15 @@ def test_realization_chain_writes_source_element(run, model):
 
 def test_function_realization_also_gets_source_element(run, model):
     f = run("create", "function", "--parent", "la:root-function", "--name", "f")["created"]["uuid"]
-    sf = run("list", "sa", "functions")["items"][1]["uuid"]
+    sf = named(run("list", "sa", "functions")["items"], "Important Function")
     run("realize", f, sf)
-    link = [el for el in _capella_xml(model).iter() if isinstance(el.tag, str) and el.getparent() is not None and el.getparent().get("id") == f and el.get("targetElement")]
+    link = [el for el in capella_xml(model).iter() if isinstance(el.tag, str) and el.getparent() is not None and el.getparent().get("id") == f and el.get("targetElement")]
     assert link and link[0].get("sourceElement") == f"#{f}"
 
 
 def test_check_reports_and_fixes_missing_source(run, model):
     f = run("create", "function", "--parent", "la:root-function", "--name", "f")["created"]["uuid"]
-    run("realize", f, run("list", "sa", "functions")["items"][1]["uuid"])
+    run("realize", f, named(run("list", "sa", "functions")["items"], "Important Function"))
     path = model / "Model Test 7.0.capella"
     path.write_text(path.read_text().replace(f' sourceElement="#{f}"', "").replace(f'sourceElement="#{f}" ', ""))
     data, code = run("check", ok=False)
@@ -149,14 +141,14 @@ def test_relations_include_extend_generalize(run):
 
 
 def test_missions(run):
-    actor = run("list", "sa", "actors")["items"][0]["uuid"]
+    actor = named(run("list", "sa", "actors")["items"], "Kevin Spacey")
     res = run("batch", input=json.dumps([
         {"op": "create-capability", "as": "c", "layer": "sa", "name": "C"},
         {"op": "create-mission", "as": "m", "name": "M"},
         {"op": "mission-exploit", "mission": "$m", "capability": "$c"},
         {"op": "mission-involve", "mission": "$m", "elements": [actor]},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     shown = run("show", ids["m"])
     assert [c["uuid"] for c in shown["exploits"]] == [ids["c"]]
     assert [a["uuid"] for a in shown["involves"]] == [actor]
@@ -176,7 +168,7 @@ def test_delete_capability_is_guarded_and_cascades(run):
         {"op": "create-mission", "as": "m", "name": "M"},
         {"op": "mission-exploit", "mission": "$m", "capability": "$s"},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     data, code = run("delete", ids["s"], ok=False)
     assert code == 1 and "--cascade" in data["error"]
     deleted = {d["type"] for d in run("delete", ids["s"], "--cascade")["deleted"]}
@@ -191,7 +183,7 @@ def test_deleting_involved_function_cascades_involvement(run):
         {"op": "create-function", "as": "f", "parent": "la:root-function", "name": "f"},
         {"op": "capability-involve", "capability": "$c", "elements": ["$f"]},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     data, code = run("delete", ids["f"], ok=False)
     assert code == 1 and "Involvement" in data["error"]
     run("delete", ids["f"], "--cascade")
@@ -204,7 +196,7 @@ def test_pre_and_postconditions(run, model):
     shown = run("show", SA_CAP)
     assert (shown["precondition_text"], shown["postcondition_text"]) == ("power is on", "target tracked")
     run("capability", "condition", SA_CAP, "--pre", "power is stable")  # replaces, no orphan
-    tree = _capella_xml(model)
+    tree = capella_xml(model)
     cap = next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("id") == SA_CAP)
     constraints = cap.findall("ownedConstraints")
     assert len(constraints) == 2  # pre + post, the old pre was removed
@@ -215,10 +207,10 @@ def test_pre_and_postconditions(run, model):
     run("capability", "condition", SA_CAP, "--clear-post")
     shown = run("show", SA_CAP)
     assert shown["precondition_text"] == "power is stable" and "postcondition_text" not in shown
-    chain = run("chain", "list", "sa")["items"][0]["uuid"]
+    chain = named(run("chain", "list", "sa")["items"], "Test Chain")
     run("chain", "condition", chain, "--post", "image displayed")
     assert run("chain", "show", chain)["postcondition_text"] == "image displayed"
-    fn = run("list", "sa", "functions")["items"][1]["uuid"]
+    fn = named(run("list", "sa", "functions")["items"], "Important Function")
     data, code = run("capability", "condition", fn, "--pre", "x", ok=False)
     assert code == 1 and "capabilities and functional chains" in data["error"]
     data, code = run("capability", "condition", SA_CAP, ok=False)
