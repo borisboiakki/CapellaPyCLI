@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, ops
+from . import __version__, capabilities, chains, ops, status
 from .model import (
     LAYERS,
     CapError,
@@ -624,6 +624,38 @@ def _relation_command(relation: str, verb: str):
 _relation_command("include", "includes")
 _relation_command("extend", "extends")
 _relation_command("generalize", "specializes (OTHER is the more general capability)")
+
+
+@cli.group("status")
+def status_group() -> None:
+    """Progress status of elements (DRAFT, TO_BE_REVIEWED, REVIEWED_OK, …)."""
+
+
+@status_group.command("values")
+@click.pass_obj
+@handled
+def status_values(ctx: Ctx) -> None:
+    """List the status values defined in the project."""
+    emit({"values": status.values(ctx.model), "clear_with": status.NOT_SET})
+
+
+@status_group.command("set")
+@click.argument("value")
+@click.argument("elements", nargs=-1, required=True)
+@write_command
+def status_set(model, value, elements):
+    """Set VALUE on one or more elements (NOT_SET clears the status)."""
+    return status.set_status(model, value, list(elements))
+
+
+@status_group.command("list")
+@click.argument("value", required=False)
+@click.option("--layer", "layer_name", type=click.Choice(LAYERS))
+@click.pass_obj
+@handled
+def status_list(ctx: Ctx, value: str | None, layer_name: str | None) -> None:
+    """List elements that have a status, grouped by value (optionally only VALUE)."""
+    emit(status.list_by_status(ctx.model, value, layer_name))
 
 
 @cli.group()

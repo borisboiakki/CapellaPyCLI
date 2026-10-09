@@ -15,6 +15,7 @@ from lxml import etree
 
 from . import capabilities as _capabilities
 from . import chains as _chains
+from . import status as _status
 from .model import (
     COMPONENT_TYPE,
     FUNCTION_TYPE,
@@ -327,6 +328,11 @@ def set_attrs(model, element: str, values: dict[str, str]):
     for key, raw in values.items():
         if key in ("uuid", "xtype", "parent"):
             raise CapError(f"{key!r} cannot be set")
+        if key in ("status", "progress_status"):
+            # Restricted to the project's ProgressStatus values (see status.py).
+            res = _status.set_status(model, raw, [obj.uuid])
+            changed[key] = res["status"]
+            continue
         if key == "is_actor" and _is_component(obj) and layer_key(obj) != "oa":
             raise CapError(
                 "is_actor cannot be changed in place: actors and components live in "
@@ -637,3 +643,4 @@ def run_batch(model, steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 OPS.update(_chains.OPS)
 OPS.update(_capabilities.OPS)
+OPS.update(_status.OPS)

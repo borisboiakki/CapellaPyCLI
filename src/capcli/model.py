@@ -212,6 +212,8 @@ def detail(obj, attrs: list[str] | None = None) -> dict[str, Any]:
         v = getattr(obj, plain, None)
         if v:
             d[plain] = str(v)
+    if attrs is None:
+        with_status(d, obj)
     for attr in attrs or SHOW_ATTRS:
         try:
             v = getattr(obj, attr)
@@ -279,6 +281,28 @@ def same_layer(a, b) -> str:
             "(use `realize` for cross-layer traceability)"
         )
     return ka
+
+
+NOT_SET = "NOT_SET"
+
+
+def status_name(obj) -> str:
+    """The element's progress status (see status.py), or NOT_SET."""
+    ref = obj._element.get("status")
+    if not ref:
+        return NOT_SET
+    try:
+        return obj._model._loader[ref.rpartition("#")[2]].get("name") or NOT_SET
+    except KeyError:
+        return NOT_SET
+
+
+def with_status(d: dict[str, Any], obj) -> dict[str, Any]:
+    """Add a ``status`` key to a show-style dict when the element has one."""
+    name = status_name(obj)
+    if name != NOT_SET:
+        d["status"] = name
+    return d
 
 
 def endpoint_owner(end):

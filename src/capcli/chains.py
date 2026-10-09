@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .model import CapError, brief, endpoint_owner, layer, resolve, root_function, type_name
+from .model import CapError, brief, endpoint_owner, layer, resolve, root_function, type_name, with_status
 from .model import is_function as _is_function
 from .model import require_layer as _require_layer
 from .model import same_layer as _same_layer
@@ -264,7 +264,7 @@ def _summary(ch, full: bool = False) -> dict[str, Any]:
         "issues": issues,
     }
     if full:
-        head = brief(ch) or {}
+        head = with_status(brief(ch) or {}, ch)
         head["layer"] = _require_layer(ch)
         head["parent"] = brief(ch.parent)
         if ch.description:
