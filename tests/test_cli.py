@@ -281,3 +281,13 @@ def test_set_existing_property_value_and_remove_realization(run):
     run("delete", link)
     assert run("show", f, "--attr", "realized_functions")["realized_functions"] == []
     assert run("check")["ok"]
+
+
+def test_type_search_includes_unnamed_elements(run):
+    # Requirements store their name in ReqIFLongName, not in `name`.
+    reqs = run("search", "--type", "Requirement")["items"]
+    assert len(reqs) == 8
+    assert any(r["name"] == "" for r in reqs)  # unnamed ones are included too
+    hits = run("search", "TestReq1")["items"]
+    assert [h["type"] for h in hits] == ["Requirement"]
+    assert run("search", "zzz-no-such-name", "--type", "Requirement")["count"] == 0

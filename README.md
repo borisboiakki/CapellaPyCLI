@@ -129,9 +129,6 @@ Kinds available in `capcli list <layer> <kind>`:
 ¹ In OA, use `operational-processes` or `capcli chain list oa`, because
 `functional-chains` comes back empty.
 
-Requirements are best found with `capcli list <layer> requirements`.
-`search --type Requirement` doesn't find them.
-
 ### Creating and modifying
 
 | Element or relation | Create | Modify | Delete | Notes |
