@@ -162,6 +162,38 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
     return {"created": brief(path), "owner": brief(owner), "hops": [brief(h) for h in hops]}
 
 
+def create_category(model, parent: str, name: str):
+    """A physical link category, owned by a physical component or package."""
+    par = resolve(model, parent)
+    if type_name(par) not in ("PhysicalComponent", "PhysicalComponentPkg"):
+        raise CapError(f"Link categories live in a physical component or package, not {type_name(par)}")
+    cat = par.physical_link_categories.create("PhysicalLinkCategory", name=name)
+    return {"created": brief(cat), "parent": brief(par)}
+
+
+def category_links(model, category: str, links: list[str], remove: bool = False):
+    cat = resolve(model, category)
+    if type_name(cat) != "PhysicalLinkCategory":
+        raise CapError(f"Expected a physical link category, got {type_name(cat)}")
+    changed, unchanged = [], []
+    for ref in links:
+        lk = resolve(model, ref)
+        if type_name(lk) != "PhysicalLink":
+            raise CapError(f"Categories group physical links, not {type_name(lk)}")
+        present = lk in cat.links
+        if remove:
+            if not present:
+                raise CapError(f"{brief(lk)} is not in {brief(cat)}")
+            cat.links.remove(lk)
+            changed.append(brief(lk))
+        elif present:
+            unchanged.append(brief(lk))
+        else:
+            cat.links.append(lk)
+            changed.append(brief(lk))
+    return {"category": brief(cat), "removed" if remove else "added": changed, "unchanged": unchanged}
+
+
 # --------------------------------------------------------------------- reads
 
 
@@ -209,6 +241,7 @@ def show(model, uuid: str) -> dict[str, Any]:
         d["ends"] = [{"port": brief(p), "component": brief(p.parent)} for p in ends]
         d["allocated_component_exchanges"] = [brief(ce) for ce in obj.allocated_component_exchanges]
         d["paths"] = [brief(p) for p in obj.physical_paths]
+        d["categories"] = [brief(c) for c in model.search("PhysicalLinkCategory") if obj in c.links]
         for ce in obj.allocated_component_exchanges:
             if (msg := _ce_issue(model, ce, [p.parent for p in ends], "this link")):
                 issues.append(msg)
@@ -272,4 +305,6 @@ OPS = {
     "create-physical-link": create_link,
     "create-physical-path": create_path,
     "deploy": deploy,
+    "create-link-category": create_category,
+    "link-category-links": category_links,
 }

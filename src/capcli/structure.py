@@ -212,6 +212,33 @@ def move(model, element: str, to: str):
     return result
 
 
+def reorder(model, element: str, before: str | None = None, after: str | None = None,
+            first: bool = False, last: bool = False):
+    """Move an element among its siblings (the order Capella's explorer shows)."""
+    elem = resolve(model, element)
+    if sum(bool(x) for x in (before, after, first, last)) != 1:
+        raise CapError("Give exactly one of --before, --after, --first, --last")
+    el = elem._element
+    parent = el.getparent()
+    siblings = [c for c in parent if c.tag == el.tag]
+    if first or last:
+        anchor_el = siblings[0] if first else siblings[-1]
+        place_before = first
+    else:
+        anchor = resolve(model, before or after)
+        anchor_el = anchor._element
+        if anchor_el.getparent() is not parent or anchor_el.tag != el.tag:
+            raise CapError("--before/--after must name a sibling in the same list (same parent, same kind)")
+        place_before = bool(before)
+    if anchor_el is el:
+        return {"unchanged": True, "reason": "already there"}
+    parent.remove(el)
+    idx = list(parent).index(anchor_el)
+    parent.insert(idx if place_before else idx + 1, el)
+    order = [c.get("name") for c in parent if c.tag == el.tag]
+    return {"moved": brief(elem), "order": order}
+
+
 # -------------------------------------------------------------------- repair
 
 
@@ -250,4 +277,5 @@ def repair(model, apply: bool = True) -> dict[str, Any]:
 OPS = {
     "create-package": create_package,
     "move": move,
+    "reorder": reorder,
 }

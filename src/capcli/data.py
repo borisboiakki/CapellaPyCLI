@@ -124,8 +124,8 @@ def create_class(model, name: str, layer_name: str | None = None, parent: str | 
 def add_property(model, cls: str, name: str, type: str, min: str = "1", max: str = "1",
                  kind: str = "ASSOCIATION", description: str | None = None):
     owner = resolve(model, cls)
-    if type_name(owner) != "Class":
-        raise CapError(f"Properties belong to classes, got {type_name(owner)} {owner.uuid}")
+    if type_name(owner) not in ("Class", "Union"):
+        raise CapError(f"Properties belong to classes and unions, got {type_name(owner)} {owner.uuid}")
     typ = resolve(model, type)
     _check_type(require_layer(owner), typ)
     kind = kind.upper()
@@ -265,7 +265,7 @@ def show(model, uuid: str) -> dict[str, Any]:
     if obj.description:
         d["description"] = str(obj.description)
     issues = []
-    if kind == "Class":
+    if kind in ("Class", "Union"):
         d["properties"] = [
             {**brief(p), "type": brief(p.type), "multiplicity": "..".join(c or "?" for c in _cards(p)),
              "kind": getattr(p.aggregation_kind, "name", str(p.aggregation_kind))}
@@ -274,6 +274,12 @@ def show(model, uuid: str) -> dict[str, Any]:
         for p in d["properties"]:
             if p["type"] is None:
                 issues.append(f"property {p['name']!r} has no type")
+        d["used_as_type_by"] = _typed_users(model, obj)
+    elif kind == "Collection":
+        d["item_type"] = brief(obj.type[0]) if len(obj.type) else None
+        d["multiplicity"] = "..".join(c or "?" for c in _cards(obj))
+        if d["item_type"] is None:
+            issues.append("collection has no item type")
         d["used_as_type_by"] = _typed_users(model, obj)
     elif kind == "Enumeration":
         d["literals"] = [lit.name for lit in obj.owned_literals]
@@ -301,6 +307,12 @@ def show(model, uuid: str) -> dict[str, Any]:
         d["used_as_type_by"] = _typed_users(model, obj)
     else:
         raise CapError(f"{kind} is not a data element; use `capcli show`")
+    if kind in GENERALIZABLE:
+        d["specializes"] = [brief(g.super) for g in obj.generalizations if g.super is not None]
+        d["specialized_by"] = [
+            brief(model.by_uuid(el.getparent().get("id")))
+            for el in model._loader.xpath(f"//ownedGeneralizations[@super='#{obj.uuid}']")
+        ]
     d["issues"] = issues
     return d
 
@@ -309,7 +321,108 @@ def is_data_element(obj) -> bool:
     return type_name(obj) in TYPE_METACLASSES + ("ExchangeItem",)
 
 
+# ------------------------------------------------------- more data elements
+
+BASIC_KINDS = {
+    "boolean": ("BooleanType", None),
+    "integer": ("NumericType", "INTEGER"),
+    "float": ("NumericType", "FLOAT"),
+    "string": ("StringType", None),
+    "physical-quantity": ("PhysicalQuantity", "FLOAT"),
+}
+
+
+def create_type(model, name: str, kind: str, layer_name: str | None = None, parent: str | None = None,
+                description: str | None = None):
+    """A basic data type: boolean, integer, float, string or physical quantity."""
+    k = kind.lower()
+    if k not in BASIC_KINDS:
+        raise CapError(f"--kind must be one of {', '.join(BASIC_KINDS)}")
+    metaclass, num_kind = BASIC_KINDS[k]
+    pkg = _parent_pkg(model, layer_name, parent)
+    kw = {"name": name}
+    if num_kind:
+        kw["kind"] = num_kind
+    typ = pkg.data_types.create(metaclass, **kw)
+    if num_kind == "FLOAT":
+        typ._element.set("discrete", "false")  # Capella writes it on every float type
+    if metaclass == "BooleanType":
+        # Capella gives every boolean type its True/False literals.
+        alias = datavalue_alias(model, typ._element)
+        add_xml_child(model, typ._element, "ownedLiterals", f"{alias}:LiteralBooleanValue",
+                      name="True", abstractType="#" + typ.uuid, value="true")
+        add_xml_child(model, typ._element, "ownedLiterals", f"{alias}:LiteralBooleanValue",
+                      name="False", abstractType="#" + typ.uuid)
+    if description:
+        typ.description = description
+    return {"created": brief(typ), "parent": brief(pkg), "kind": k}
+
+
+def create_union(model, name: str, layer_name: str | None = None, parent: str | None = None,
+                 description: str | None = None):
+    pkg = _parent_pkg(model, layer_name, parent)
+    union = pkg.classes.create("Union", name=name)
+    if description:
+        union.description = description
+    return {"created": brief(union), "parent": brief(pkg)}
+
+
+def create_collection(model, name: str, type: str, layer_name: str | None = None,
+                      parent: str | None = None, min: str = "0", max: str = "*",
+                      description: str | None = None):
+    pkg = _parent_pkg(model, layer_name, parent)
+    typ = resolve(model, type)
+    _check_type(require_layer(pkg), typ)
+    col = pkg.collections.create("Collection", name=name)
+    col.type.append(typ)
+    _set_cards(model, col, min, max)
+    if description:
+        col.description = description
+    return {"created": brief(col), "parent": brief(pkg), "item_type": brief(typ), "multiplicity": f"{min}..{max}"}
+
+
+GENERALIZABLE = ("Class", "Union", "Enumeration", "Collection")
+
+
+def generalize(model, element: str, super: str, remove: bool = False):
+    """``element`` specializes ``super`` (both classes, unions, enumerations or collections)."""
+    sub, sup = resolve(model, element), resolve(model, super)
+    if type_name(sub) not in GENERALIZABLE or type_name(sup) != type_name(sub):
+        raise CapError(f"Generalization links two elements of the same kind among {', '.join(GENERALIZABLE)}")
+    if sub == sup:
+        raise CapError("An element cannot specialize itself")
+    if LAYERS.index(require_layer(sup)) > LAYERS.index(require_layer(sub)):
+        raise CapError(f"{brief(sup)} is in a layer below {brief(sub)} and is not visible from it")
+    links = [g for g in sub.generalizations if g.super == sup]
+    if remove:
+        if not links:
+            raise CapError(f"{brief(sub)} does not specialize {brief(sup)}")
+        for g in links:
+            model._loader.idcache_remove(g._element)
+            g._element.getparent().remove(g._element)
+        return {"element": brief(sub), "no_longer_specializes": brief(sup)}
+    if links:
+        return {"unchanged": True, "reason": "already specializes it"}
+    if any(a == sub for a in _supers(sup)):
+        raise CapError("This generalization would create a cycle")
+    sub.generalizations.create("Generalization", super=sup, sub=sub)
+    return {"element": brief(sub), "specializes": brief(sup)}
+
+
+def _supers(obj, seen=None):
+    seen = seen or set()
+    for g in obj.generalizations:
+        if g.super is not None and g.super.uuid not in seen:
+            seen.add(g.super.uuid)
+            yield g.super
+            yield from _supers(g.super, seen)
+
+
 OPS = {
+    "create-type": create_type,
+    "create-union": create_union,
+    "create-collection": create_collection,
+    "generalize": generalize,
     "create-class": create_class,
     "add-property": add_property,
     "create-enumeration": create_enumeration,

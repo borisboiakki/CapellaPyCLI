@@ -251,10 +251,15 @@ def realize(model, element: str, realized: str):
         attr = "realized_chains"
     elif _capabilities.is_capability(elem) and _capabilities.is_capability(up):
         attr = "realized_capabilities"
+    elif type_name(elem) in ("State", "Mode") and type_name(up) == type_name(elem):
+        attr = "realized_states"
+    elif type_name(elem) == type_name(up) == "StateTransition":
+        attr = "realized_transitions"
     else:
         raise CapError(
-            "realize links function->function, component->component, "
-            "chain->chain or capability->capability"
+            "realize links function->function, component->component, chain->chain, "
+            "capability->capability, state->state, mode->mode or "
+            "transition->transition"
         )
     order = ["oa", "sa", "la", "pa"]
     ke, ku = _require_layer(elem), _require_layer(up)
@@ -387,9 +392,19 @@ _DETACHABLE_ATTRS = {
     # A transition's effects (functions) and triggers (exchanges, items):
     # deleting one of those must not delete the transition.
     "effect", "triggers",
+    # A state's entry/exit/do activities (functions).
+    "entry", "exit", "doActivity",
     # Interfaces provided/required by component ports.
     "providedInterfaces", "requiredInterfaces",
 }
+# Same, for attribute names that are too generic to detach on every element.
+_DETACHABLE_TYPED = {("PhysicalLinkCategory", "links")}
+
+
+def _detachable(el, attr: str) -> bool:
+    return attr in _DETACHABLE_ATTRS or (_xtype(el), attr) in _DETACHABLE_TYPED
+
+
 # Caches Capella keeps on regions and states (see modes.py): always updated,
 # never a reason to refuse a delete.
 _ALWAYS_DETACH_ATTRS = {"involvedStates", "referencedStates"}
@@ -480,7 +495,7 @@ def delete(model, element: str, cascade: bool = False):
                     path = owner.getparent()
                     blockers.append({"uuid": path.get("id"), "type": _xtype(path), "name": path.get("name"), "via": "involvement"})
                 continue
-            if attr in _DETACHABLE_ATTRS:
+            if _detachable(el, attr):
                 if not cascade:
                     blockers.append(info)
                 continue  # detached below
@@ -512,7 +527,7 @@ def delete(model, element: str, cascade: bool = False):
     ids = doomed_ids()
     detached = []
     for el, attr, ref in list(iter_refs(model)):
-        if attr in _DETACHABLE_ATTRS | _ALWAYS_DETACH_ATTRS and ref in ids and not inside_doomed(el):
+        if (_detachable(el, attr) or attr in _ALWAYS_DETACH_ATTRS) and ref in ids and not inside_doomed(el):
             tokens = [t for t in el.get(attr).split() if t.rpartition("#")[2] != ref]
             if tokens:
                 el.set(attr, " ".join(tokens))

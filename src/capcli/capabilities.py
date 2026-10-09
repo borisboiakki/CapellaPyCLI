@@ -26,7 +26,9 @@ from .model import (
     layer,
     require_layer,
     resolve,
+    constraint_text,
     same_layer,
+    set_constraint,
     type_name,
     with_status,
 )
@@ -202,6 +204,7 @@ def show_capability(model, capability: str) -> dict[str, Any]:
         c = getattr(cap, cond, None)
         if c is not None:
             d[cond] = brief(c)
+            d[f"{cond}_text"] = constraint_text(c)
     d["involves"] = involved(cap)
     d["realizes"] = [brief(c) for c in cap.realized_capabilities]
     d["realized_by"] = [brief(c) for c in cap.realizing_capabilities]
@@ -242,6 +245,23 @@ def _issues(model, cap, key, d) -> list[str]:
                     "which is not involved in the capability"
                 )
     return issues
+
+
+def set_conditions(model, element: str, pre: str | None = None, post: str | None = None,
+                   clear_pre: bool = False, clear_post: bool = False):
+    """Pre-/postcondition text of a capability or functional chain."""
+    obj = resolve(model, element)
+    if not (is_capability(obj) or type_name(obj) in CHAIN_TYPES):
+        raise CapError(f"Pre/postconditions belong to capabilities and functional chains, not {type_name(obj)}")
+    if pre is None and post is None and not clear_pre and not clear_post:
+        raise CapError("Give --pre and/or --post text (or --clear-pre / --clear-post)")
+    out: dict[str, Any] = {"element": brief(obj)}
+    for text, clear, xml_attr, accessor in ((pre, clear_pre, "preCondition", "precondition"),
+                                            (post, clear_post, "postCondition", "postcondition")):
+        if text is not None or clear:
+            set_constraint(model, obj, xml_attr, accessor, None if clear else text)
+            out[accessor] = None if clear else text
+    return out
 
 
 # ------------------------------------------------------------------ missions
@@ -314,6 +334,7 @@ OPS = {
     "capability-include": lambda model, capability, other, remove=False: relate(model, "include", capability, other, remove),
     "capability-extend": lambda model, capability, other, remove=False: relate(model, "extend", capability, other, remove),
     "capability-generalize": lambda model, capability, other, remove=False: relate(model, "generalize", capability, other, remove),
+    "set-conditions": set_conditions,
     "create-mission": create_mission,
     "mission-exploit": mission_exploit,
     "mission-involve": mission_involve,

@@ -121,3 +121,22 @@ def test_delete_deployed_component(run):
     assert {"PhysicalComponent", "Part", "PartDeploymentLink"} <= deleted
     assert run("pa", "show", ids["ecu"])["deployed"] == []
     assert run("check")["ok"]
+
+
+def test_link_categories(run, model):
+    ids = _build(run)
+    cat = run("pa", "category", "--parent", "pa:root-component", "--name", "CAN buses")["created"]["uuid"]
+    run("pa", "categorize", cat, ids["l1"], ids["l2"])
+    assert run("pa", "categorize", cat, ids["l1"])["unchanged"]
+    assert [c["uuid"] for c in run("pa", "show", ids["l1"])["categories"]] == [cat]
+    assert {x["uuid"] for x in run("show", cat)["links"]} == {ids["l1"], ids["l2"]}
+    el = _el(_xml(model), cat)
+    assert el.tag == "ownedPhysicalLinkCategories" and el.get("links").split() == ["#" + ids["l1"], "#" + ids["l2"]]
+    data, code = run("pa", "categorize", cat, ids["ce"], ok=False)
+    assert code == 1 and "physical links" in data["error"]
+    run("pa", "categorize", cat, ids["l2"], "--remove")
+    assert [x["uuid"] for x in run("show", cat)["links"]] == [ids["l1"]]
+    res = run("delete", ids["l1"], "--cascade")  # the category is kept, the link detached
+    assert [d["attr"] for d in res["detached"]] == ["links"]
+    assert run("show", cat)["uuid"] == cat
+    assert run("check")["ok"]

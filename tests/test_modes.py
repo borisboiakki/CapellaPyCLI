@@ -138,3 +138,54 @@ def test_check_detects_and_fixes_stale_caches(run, model):
     assert code == 2 and data["state_caches"]
     assert run("check", "--fix")["saved"]
     assert run("check")["ok"]
+
+
+def test_activities_and_new_pseudo_states(run, model):
+    ids = _build(run)
+    run("mode", "activity", ids["on"], "--entry", ids["fn"], "--do", ids["fn"])
+    assert run("mode", "activity", ids["on"], "--entry", ids["fn"])["unchanged"]
+    shown = run("show", ids["on"])
+    assert [f["uuid"] for f in shown["entry"]] == [ids["fn"]] and [f["uuid"] for f in shown["do"]] == [ids["fn"]]
+    el = _el(_xml(model), ids["on"])
+    assert (el.get("entry"), el.get("doActivity")) == ("#" + ids["fn"], "#" + ids["fn"])
+    run("mode", "activity", ids["on"], "--do", ids["fn"], "--remove")
+    assert "do" not in run("show", ids["on"])
+    la_fn = run("create", "function", "--parent", "la:root-function", "--name", "lf")["created"]["uuid"]
+    data, code = run("mode", "activity", ids["on"], "--exit", la_fn, ok=False)
+    assert code == 1 and "layer" in data["error"]
+    data, code = run("mode", "activity", ids["init"], "--exit", ids["fn"], ok=False)
+    assert code == 1 and "states and modes" in data["error"]
+    for kind in ("shallow-history", "deep-history", "entry-point", "exit-point"):
+        run("mode", "add", ids["on"], "--name", kind, "--kind", kind)
+    names = [s["name"] for s in run("mode", "show", ids["sm"])["regions"][0]["states"][2]["regions"][0]["states"]]
+    assert {"shallow-history", "exit-point"} <= set(names)
+    res = run("delete", ids["fn"], "--cascade")  # entry activity is detached, the state kept
+    assert {"entry"} <= {d["attr"] for d in res["detached"]}
+    assert "entry" not in run("show", ids["on"])
+    assert run("check")["ok"]
+
+
+def test_state_and_transition_realization(run, model):
+    ids = _build(run)
+    res = run("batch", input=json.dumps([
+        {"op": "create-state-machine", "as": "sm", "owner": "la:root-component"},
+        {"op": "add-state", "as": "off", "parent": "$sm", "name": "Off"},
+        {"op": "add-state", "as": "on", "parent": "$sm", "name": "On"},
+        {"op": "add-transition", "as": "t", "source": "$off", "target": "$on"},
+        {"op": "realize", "element": "$on", "realized": ids["on"]},
+        {"op": "realize", "element": "$off", "realized": ids["off"]},
+    ]))
+    la = {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
+    sa_t = next(t["uuid"] for t in run("mode", "show", ids["sm"])["regions"][0]["transitions"]
+                if t["from"]["uuid"] == ids["off"] and t["to"]["uuid"] == ids["on"])
+    run("realize", la["t"], sa_t)
+    assert [x["uuid"] for x in run("show", la["on"])["realizes"]] == [ids["on"]]
+    tree = _xml(model)
+    sr = _el(tree, la["on"]).find("ownedAbstractStateRealizations")
+    assert (sr.get("targetElement"), sr.get("sourceElement")) == ("#" + ids["on"], "#" + la["on"])
+    tr = _el(tree, la["t"]).find("ownedStateTransitionRealizations")
+    assert (tr.get("targetElement"), tr.get("sourceElement")) == ("#" + sa_t, "#" + la["t"])
+    data, code = run("realize", la["on"], sa_t, ok=False)  # a state can't realize a transition
+    assert code == 1
+    run("delete", ids["on"], "--cascade")  # realizations go with the realized state
+    assert run("check")["ok"]

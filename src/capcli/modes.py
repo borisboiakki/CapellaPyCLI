@@ -8,8 +8,8 @@ Capella keeps caches and conventions that capellambse 0.8.1 does not:
 - every ``State`` / ``Mode`` owns a region (named "region"), so it can hold
   sub-states;
 - a transition guard is a ``Constraint`` owned by the transition, whose
-  ``ownedSpecification`` is an ``OpaqueExpression`` (capellambse creates the
-  constraint without it, and can't add it).
+  ``ownedSpecification`` is an ``OpaqueExpression`` (written by
+  ``model.set_constraint``, since capellambse can't).
 
 This module keeps all of that in sync. It also enforces Arcadia's rule that a
 region holds either modes or states, never both.
@@ -19,14 +19,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from lxml import etree
-
 from .model import (
     LAYERS,
     CapError,
-    add_xml_child,
+    constraint_text,
+    set_constraint,
     brief,
-    datavalue_alias,
     is_component,
     is_function,
     layer,
@@ -46,7 +44,12 @@ KINDS = {
     "choice": "ChoicePseudoState",
     "fork": "ForkPseudoState",
     "join": "JoinPseudoState",
+    "shallow-history": "ShallowHistoryPseudoState",
+    "deep-history": "DeepHistoryPseudoState",
+    "entry-point": "EntryPointPseudoState",
+    "exit-point": "ExitPointPseudoState",
 }
+ACTIVITY_ATTRS = {"entry": "entry", "exit": "exit", "do": "do_activity"}
 STATE_TYPES = set(KINDS.values())
 HOLDERS = ("State", "Mode")  # the kinds that own sub-regions
 TRIGGER_TYPES = ("FunctionalExchange", "ComponentExchange", "ExchangeItem")
@@ -170,19 +173,6 @@ def _common_region(source, target):
     return regions(source)[-1]  # top region of the machine
 
 
-def _set_guard(model, transition, text: str) -> None:
-    for c in list(transition.constraints):
-        if transition._element.get("guard", "").endswith(c.uuid):
-            model._loader.idcache_remove(c._element)
-            c._element.getparent().remove(c._element)
-    c = transition.constraints.create("Constraint", name="")
-    alias = datavalue_alias(model, c._element)
-    spec = add_xml_child(model, c._element, "ownedSpecification", f"{alias}:OpaqueExpression")
-    etree.SubElement(spec, "bodies").text = text
-    etree.SubElement(spec, "languages").text = "capella:linkedText"
-    transition.guard = c
-
-
 def add_transition(model, source: str, target: str, triggers: list[str] | None = None,
                    effects: list[str] | None = None, trigger_description: str | None = None,
                    guard: str | None = None, name: str | None = None):
@@ -219,8 +209,45 @@ def add_transition(model, source: str, target: str, triggers: list[str] | None =
     if trigger_description:
         tr.trigger_description = trigger_description
     if guard:
-        _set_guard(model, tr, guard)
+        set_constraint(model, tr, "guard", "guard", guard)
     return {"created": brief(tr), "from": brief(src), "to": brief(tgt), "region": brief(region)}
+
+
+def set_activities(model, state: str, entry: list[str] | None = None, exit: list[str] | None = None,
+                   do: list[str] | None = None, remove: bool = False):
+    """Functions run on entering, leaving or while in a state or mode."""
+    st = resolve(model, state)
+    if type_name(st) not in HOLDERS:
+        raise CapError(f"Entry/exit/do activities belong to states and modes, not {type_name(st)}")
+    changed: dict[str, list] = {}
+    for key, refs in (("entry", entry), ("exit", exit), ("do", do)):
+        lst = getattr(st, ACTIVITY_ATTRS[key])
+        for ref in refs or []:
+            fn = resolve(model, ref)
+            if not is_function(fn):
+                raise CapError(f"{key} activities are functions, not {type_name(fn)}")
+            same_layer(st, fn)
+            if remove:
+                if fn not in lst:
+                    raise CapError(f"{brief(fn)} is not a {key} activity of {brief(st)}")
+                lst.remove(fn)
+            elif fn in lst:
+                continue
+            else:
+                lst.append(fn)
+            changed.setdefault(key, []).append(brief(fn))
+    if not changed:
+        return {"unchanged": True, "reason": "nothing to change (give --entry, --exit or --do)"}
+    return {"state": brief(st), "removed" if remove else "added": changed}
+
+
+def _activities(st) -> dict[str, Any]:
+    out = {}
+    for key, attr in ACTIVITY_ATTRS.items():
+        fns = [brief(f) for f in getattr(st, attr)]
+        if fns:
+            out[key] = fns
+    return out
 
 
 def set_available(model, state: str, elements: list[str], remove: bool = False):
@@ -259,12 +286,7 @@ def _available_in(model, st) -> list[dict[str, Any]]:
 
 
 def _guard_text(tr) -> str | None:
-    g = tr.guard
-    if g is None:
-        return None
-    spec = g._element.find("ownedSpecification")
-    body = spec.find("bodies") if spec is not None else None
-    return body.text if body is not None else ""
+    return constraint_text(tr.guard)
 
 
 def _transition(tr) -> dict[str, Any]:
@@ -293,6 +315,7 @@ def _region_tree(model, region, issues: list[str]) -> dict[str, Any]:
     for s in states:
         node = with_status(brief(s), s)
         if type_name(s) in HOLDERS:
+            node.update(_activities(s))
             avail = _available_in(model, s)
             if avail:
                 node["available"] = avail
@@ -321,6 +344,8 @@ def show(model, uuid: str) -> dict[str, Any]:
         d["incoming"] = [_transition(t) for t in model.search("StateTransition", below=machine) if t.target == obj]
         d["outgoing"] = [_transition(t) for t in model.search("StateTransition", below=machine) if t.source == obj]
         if kind in HOLDERS:
+            d.update(_activities(obj))
+            d["realizes"] = [brief(x) for x in obj.realized_states]
             d["available"] = _available_in(model, obj)
             d["sub_states"] = [brief(s) for r in obj.regions for s in r.states]
         return d
@@ -343,4 +368,5 @@ OPS = {
     "add-state": add_state,
     "add-transition": add_transition,
     "set-available": set_available,
+    "set-activities": set_activities,
 }
