@@ -3,6 +3,8 @@
 import pathlib
 import re
 
+from helpers import named
+
 
 def test_sa_system_is_a_black_box(run):
     data, code = run("create", "component", "--parent", "sa:root-component", "--name", "Flight Control System", ok=False)
@@ -27,7 +29,7 @@ def test_logical_decomposition_still_allowed(run):
 
 
 def test_is_actor_cannot_be_toggled(run):
-    actor = run("list", "sa", "actors")["items"][0]["uuid"]
+    actor = named(run("list", "sa", "actors")["items"], "Kevin Spacey")
     data, code = run("set", actor, "is_actor=false", ok=False)
     assert code == 1 and "is_actor" in data["error"]
 

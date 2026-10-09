@@ -1,16 +1,6 @@
 import json
 
-from lxml import etree
-
-XSI = "{http://www.w3.org/2001/XMLSchema-instance}type"
-
-
-def _xml(model):
-    return etree.parse(str(model / "Model Test 7.0.capella"))
-
-
-def _by_id(tree, uuid):
-    return next(el for el in tree.iter() if isinstance(el.tag, str) and el.get("id") == uuid)
+from helpers import XSI, by_id, capella_xml, named
 
 
 def _type(run, layer, name):
@@ -19,7 +9,7 @@ def _type(run, layer, name):
 
 def _build(run):
     integer = _type(run, "la", "Integer")
-    fe = run("list", "la", "function-exchanges")["items"][0]["uuid"]
+    fe = named(run("list", "la", "function-exchanges")["items"], "educate")
     res = run("batch", input=json.dumps([
         {"op": "create-class", "as": "pos", "layer": "la", "name": "Position"},
         {"op": "add-property", "class": "$pos", "name": "lat", "type": integer},
@@ -61,17 +51,17 @@ def test_class_enum_exchange_item_round_trip(run):
 
 def test_xml_matches_capella(run, model):
     ids = _build(run)
-    tree = _xml(model)
-    prop = next(p for p in _by_id(tree, ids["pos"]) if p.get("name") == "history")
+    tree = capella_xml(model)
+    prop = next(p for p in by_id(tree, ids["pos"]) if p.get("name") == "history")
     assert prop.get("aggregationKind") == "COMPOSITION"
     assert prop.find("ownedMinCard").get("value") == "0" and prop.find("ownedMaxCard").get("value") == "*"
     assert prop.find("ownedMinCard").get("{http://www.w3.org/2001/XMLSchema-instance}type").endswith(":LiteralNumericValue")
-    for lit in _by_id(tree, ids["mode"]):
+    for lit in by_id(tree, ids["mode"]):
         assert lit.get("abstractType") == "#" + ids["mode"]
-    elem = _by_id(tree, ids["msg"]).find("ownedElements")
+    elem = by_id(tree, ids["msg"]).find("ownedElements")
     assert (elem.get("direction"), elem.get("composite")) == ("UNSET", "true")
     assert elem.find("ownedMaxCard").get("value") == "1"
-    assert f"#{ids['msg']}" in _by_id(tree, ids["fe"]).get("exchangedItems").split()
+    assert f"#{ids['msg']}" in by_id(tree, ids["fe"]).get("exchangedItems").split()
 
 
 def test_rules_and_errors(run):
@@ -87,7 +77,7 @@ def test_rules_and_errors(run):
     assert code == 1
     data, code = run("data", "class", "create", "--parent", "la:root-component", "--name", "X", ok=False)
     assert code == 1 and "data package" in data["error"]
-    fn = run("list", "la", "functions")["items"][1]["uuid"]
+    fn = named(run("list", "la", "functions")["items"], "manage the school")
     data, code = run("data", "assign", ids["msg"], fn, ok=False)
     assert code == 1 and "function ports" in data["error"]
 
@@ -96,7 +86,7 @@ def test_assign_ports_component_exchanges_and_remove(run):
     ids = _build(run)
     fn = next(f["uuid"] for f in run("list", "la", "functions")["items"] if run("show", f["uuid"], "--attr", "outputs")["outputs"])
     port = run("show", fn, "--attr", "outputs")["outputs"][0]["uuid"]
-    ce = run("list", "la", "component-exchanges")["items"][0]["uuid"]
+    ce = named(run("list", "la", "component-exchanges")["items"], "Headmaster Responsibilities")
     res = run("data", "assign", ids["msg"], port, ce, ids["fe"])
     assert len(res["assigned_to"]) == 2 and res["unchanged"][0]["uuid"] == ids["fe"]
     assert {c["uuid"] for c in run("show", ids["msg"])["carried_by"]} == {ids["fe"], port, ce}
@@ -133,12 +123,12 @@ def test_basic_types_union_collection(run, model):
         {"op": "create-collection", "as": "c", "layer": "la", "name": "Counts", "type": "$n"},
     ]))
     ids = {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
-    tree = _xml(model)
-    lits = _by_id(tree, ids["b"]).findall("ownedLiterals")  # Capella writes True/False
+    tree = capella_xml(model)
+    lits = by_id(tree, ids["b"]).findall("ownedLiterals")  # Capella writes True/False
     assert [(e.get("name"), e.get("value"), e.get("abstractType")) for e in lits] == [
         ("True", "true", "#" + ids["b"]), ("False", None, "#" + ids["b"])]
-    assert _by_id(tree, ids["n"]).get("kind") is None  # INTEGER is the default, not written
-    assert (_by_id(tree, ids["f"]).get("kind"), _by_id(tree, ids["f"]).get("discrete")) == ("FLOAT", "false")
+    assert by_id(tree, ids["n"]).get("kind") is None  # INTEGER is the default, not written
+    assert (by_id(tree, ids["f"]).get("kind"), by_id(tree, ids["f"]).get("discrete")) == ("FLOAT", "false")
     assert [p["name"] for p in run("show", ids["u"])["properties"]] == ["count"]
     col = run("show", ids["c"])
     assert col["item_type"]["uuid"] == ids["n"] and col["multiplicity"] == "0..*" and col["issues"] == []
@@ -157,7 +147,7 @@ def test_generalize(run, model):
     assert run("data", "generalize", sub, ids["pos"])["unchanged"]
     assert [x["uuid"] for x in run("show", sub)["specializes"]] == [ids["pos"]]
     assert [x["uuid"] for x in run("show", ids["pos"])["specialized_by"]] == [sub]
-    g = _by_id(_xml(model), sub).find("ownedGeneralizations")
+    g = by_id(capella_xml(model), sub).find("ownedGeneralizations")
     assert (g.get("super"), g.get("sub")) == ("#" + ids["pos"], "#" + sub)  # as Capella writes it
     data, code = run("data", "generalize", ids["pos"], sub, ok=False)
     assert code == 1 and "cycle" in data["error"]
@@ -182,10 +172,10 @@ def test_union_members_attributes_and_multiplicities_match_capella(run, model):
     ]))
     steps = {s.get("as"): s for s in res["steps"]}
     assert steps["m"]["multiplicity"] == "1..2"  # normalized, as written
-    tree = _xml(model)
-    member = _by_id(tree, steps["m"]["created"]["uuid"])
+    tree = capella_xml(model)
+    member = by_id(tree, steps["m"]["created"]["uuid"])
     assert member.get(XSI).endswith(":UnionProperty")
-    attr = _by_id(tree, steps["p"]["created"]["uuid"])
+    attr = by_id(tree, steps["p"]["created"]["uuid"])
     assert attr.get("aggregationKind") is None  # a plain attribute, as Capella writes it
     for bad in ("²", "abc", "-1"):
         data, code = run("data", "property", "add", steps["c"]["created"]["uuid"], "--name", "x",

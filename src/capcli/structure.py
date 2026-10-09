@@ -42,8 +42,8 @@ PKG_TYPES = {
                   "la": "LogicalComponentPkg", "pa": "PhysicalComponentPkg"},
     "capability": {"oa": "OperationalCapabilityPkg", "sa": "CapabilityPkg",
                    "la": "CapabilityRealizationPkg", "pa": "CapabilityRealizationPkg"},
-    "data": {k: "DataPkg" for k in ("oa", "sa", "la", "pa")},
-    "interface": {k: "InterfacePkg" for k in ("oa", "sa", "la", "pa")},
+    "data": dict.fromkeys(("oa", "sa", "la", "pa"), "DataPkg"),
+    "interface": dict.fromkeys(("oa", "sa", "la", "pa"), "InterfacePkg"),
 }
 DATA_TYPES = ("Class", "Union", "Collection", "Enumeration", "BooleanType", "NumericType",
               "StringType", "PhysicalQuantity", "ExchangeItem")

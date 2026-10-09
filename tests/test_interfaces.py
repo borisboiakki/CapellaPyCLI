@@ -1,18 +1,13 @@
 import json
 
 import capellambse
-from lxml import etree
 
-CS = "{http://www.w3.org/2001/XMLSchema-instance}type"
-
-
-def _ids(res):
-    return {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
+from helpers import XSI, capella_xml, created_ids, named
 
 
 def _build(run):
     ei = run("data", "exchange-item", "create", "--layer", "la", "--name", "NavMsg")["created"]["uuid"]
-    ids = _ids(run("batch", input=json.dumps([
+    ids = created_ids(run("batch", input=json.dumps([
         {"op": "create-interface", "as": "i", "layer": "la", "name": "INav"},
         {"op": "interface-items", "interface": "$i", "elements": [ei]},
         {"op": "create-component", "as": "p", "parent": "la:root-component", "name": "Provider"},
@@ -23,10 +18,6 @@ def _build(run):
     ])))
     ids["ei"] = ei
     return ids
-
-
-def _xml(model):
-    return etree.parse(str(model / "Model Test 7.0.capella"))
 
 
 def test_read_existing_interfaces(run):
@@ -53,13 +44,13 @@ def test_xml_implementation_and_allocation(run, model):
     ids = _build(run)
     pc = run("create", "component", "--parent", "pa:root-component", "--name", "PImpl", "--nature", "behavior")["created"]["uuid"]
     run("interface", "allocate", pc, ids["i"])
-    tree = _xml(model)
+    tree = capella_xml(model)
     impl = next(e for e in tree.iter() if isinstance(e.tag, str) and e.tag == "ownedInterfaceImplementations"
                 and e.getparent().get("id") == ids["p"])
     assert impl.get("implementedInterface") == "#" + ids["i"] and impl.get("implementedInterfaces") is None
-    assert impl.get(CS).endswith(":InterfaceImplementation")
+    assert impl.get(XSI).endswith(":InterfaceImplementation")
     alloc = next(e for e in tree.iter() if isinstance(e.tag, str) and e.tag == "ownedInterfaceAllocations")
-    assert alloc.get(CS).endswith(":InterfaceAllocation")
+    assert alloc.get(XSI).endswith(":InterfaceAllocation")
     assert (alloc.get("targetElement"), alloc.get("sourceElement")) == ("#" + ids["i"], "#" + pc)
     assert [x["uuid"] for x in run("show", ids["i"])["allocated_to"]] == [pc]
     assert run("check")["ok"]
@@ -75,10 +66,10 @@ def test_ports_remove_and_rules(run):
     run("interface", "provide", ids["p"], ids["i"], "--remove")
     shown = run("show", ids["i"])
     assert shown["provided_by"] == shown["required_by"] == shown["provided_by_ports"] == []
-    sa_actor = run("list", "sa", "actors")["items"][0]["uuid"]
+    sa_actor = named(run("list", "sa", "actors")["items"], "Kevin Spacey")
     data, code = run("interface", "provide", sa_actor, ids["i"], ok=False)
     assert code == 1 and "not visible from sa" in data["error"]
-    fn = run("list", "la", "functions")["items"][1]["uuid"]
+    fn = named(run("list", "la", "functions")["items"], "manage the school")
     data, code = run("interface", "provide", fn, ids["i"], ok=False)
     assert code == 1 and "component ports" in data["error"]
     run("interface", "require", ids["u"], ids["i"])
@@ -111,7 +102,7 @@ def test_check_fixes_capellambse_plural_attribute(run, model):
 
 
 def test_interface_allocation_cycle_is_refused(run):
-    ids = _ids(run("batch", input=json.dumps([
+    ids = created_ids(run("batch", input=json.dumps([
         {"op": "create-interface", "as": "a", "layer": "la", "name": "A"},
         {"op": "create-interface", "as": "b", "layer": "la", "name": "B"},
         {"op": "create-interface", "as": "c", "layer": "la", "name": "C"},

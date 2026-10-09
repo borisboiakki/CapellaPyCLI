@@ -5,13 +5,11 @@ import json
 import capellambse
 from lxml import etree
 
-
-def _ids(res):
-    return {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
+from helpers import created_ids, named
 
 
 def _build(run):
-    return _ids(run("batch", input=json.dumps([
+    return created_ids(run("batch", input=json.dumps([
         {"op": "create-function", "as": "a", "parent": "la:root-function", "name": "A"},
         {"op": "create-function", "as": "grp", "parent": "la:root-function", "name": "Group"},
         {"op": "create-function", "as": "b", "parent": "$grp", "name": "B"},
@@ -62,8 +60,8 @@ def test_move_component_moves_part_and_exchange(run, model):
 
 def test_move_rules(run):
     ids = _build(run)
-    actor = run("list", "la", "actors")["items"][0]["uuid"]
-    cap = run("list", "la", "capabilities")["items"][0]["uuid"]
+    actor = named(run("list", "la", "actors")["items"], "Prof. A. P. W. B. Dumbledore")
+    cap = named(run("list", "la", "capabilities")["items"], "Capability Realization")
     for args, needle in [
         (("move", ids["sub"], ids["k2"]), "descendants"),
         (("move", ids["k1"], "sa:structure"), "within their layer"),
@@ -77,7 +75,7 @@ def test_move_rules(run):
 
 
 def test_move_capability_class_and_package(run):
-    cap = run("list", "la", "capabilities")["items"][0]["uuid"]
+    cap = named(run("list", "la", "capabilities")["items"], "Capability Realization")
     cap_pkg = run("package", "create", "--parent", "la:capabilities", "--name", "Sub")["created"]["uuid"]
     assert run("move", cap, cap_pkg)["to"]["uuid"] == cap_pkg
     cls = run("data", "class", "create", "--layer", "la", "--name", "Pos")["created"]["uuid"]
@@ -115,7 +113,7 @@ def test_reorder(run):
         {"op": "create-function", "as": "b", "parent": "la:root-function", "name": "B"},
         {"op": "create-function", "as": "c", "parent": "la:root-function", "name": "C"},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     names = lambda: [f["name"] for f in run("show", "la:root-function")["functions"] if f["name"] in "ABC"]  # noqa: E731
     run("reorder", ids["c"], "--before", ids["a"])
     assert names() == ["C", "A", "B"]
@@ -146,7 +144,7 @@ def test_move_oa_entity_moves_part_and_communication_mean(run, model):
 
 
 def test_package_move_rehomes_exchanges(run):
-    ids = _ids(run("batch", input=json.dumps([
+    ids = created_ids(run("batch", input=json.dumps([
         {"op": "create-component", "as": "cc", "parent": "la:root-component", "name": "CC"},
         {"op": "create-package", "as": "p", "parent": "la:root-component", "name": "P"},
         {"op": "create-component", "as": "a", "parent": "$p", "name": "A"},

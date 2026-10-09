@@ -15,7 +15,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "pytest-xdist>=3", "ruff>=0.6"]
 
 [project.scripts]
 capcli = "capcli.cli:main"
@@ -25,4 +25,19 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "-n auto"
 filterwarnings = ["ignore::DeprecationWarning", "ignore::UserWarning"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP", "C4", "PIE"]
+ignore = [
+    "E501",   # long JSON/XML literals and error messages read better on one line
+    "E731",   # small lambdas in OPS tables and predicates
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["capcli", "helpers"]

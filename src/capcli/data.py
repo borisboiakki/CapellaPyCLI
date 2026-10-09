@@ -17,15 +17,14 @@ SA "Predefined Types" (Boolean, Integer, String, …), but not the reverse.
 from __future__ import annotations
 
 import re
-
 from typing import Any
 
 from .model import (
     LAYERS,
-    add_xml_child,
-    datavalue_alias,
     CapError,
+    add_xml_child,
     brief,
+    datavalue_alias,
     layer,
     layer_key,
     require_layer,

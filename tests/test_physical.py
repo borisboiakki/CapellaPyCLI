@@ -1,14 +1,6 @@
 import json
 
-from lxml import etree
-
-
-def _xml(model):
-    return etree.parse(str(model / "Model Test 7.0.capella"))
-
-
-def _el(tree, uuid):
-    return next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("id") == uuid)
+from helpers import by_id, capella_xml
 
 
 def _build(run):
@@ -57,15 +49,15 @@ def test_build_and_read_back(run):
 
 def test_xml_matches_capella(run, model):
     ids = _build(run)
-    tree = _xml(model)
+    tree = capella_xml(model)
     ecu_part = next(e for e in tree.iter() if isinstance(e.tag, str) and e.get("abstractType") == "#" + ids["ecu"])
     dl = ecu_part.find("ownedDeploymentLinks")
     assert dl.get("{http://www.w3.org/2001/XMLSchema-instance}type").endswith(":PartDeploymentLink")
     assert dl.get("location") == "#" + ecu_part.get("id")
-    invs = [c for c in _el(tree, ids["p"]) if c.tag == "ownedPhysicalPathInvolvements"]
+    invs = [c for c in by_id(tree, ids["p"]) if c.tag == "ownedPhysicalPathInvolvements"]
     assert len(invs) == 5
     assert [i.get("nextInvolvements") for i in invs] == ["#" + j.get("id") for j in invs[1:]] + [None]
-    alloc = _el(tree, ids["p"]).find("ownedComponentExchangeAllocations")
+    alloc = by_id(tree, ids["p"]).find("ownedComponentExchangeAllocations")
     assert (alloc.get("sourceElement"), alloc.get("targetElement")) == ("#" + ids["p"], "#" + ids["ce"])
 
 
@@ -132,7 +124,7 @@ def test_link_categories(run, model):
     assert run("pa", "categorize", cat, ids["l1"])["unchanged"]
     assert [c["uuid"] for c in run("pa", "show", ids["l1"])["categories"]] == [cat]
     assert {x["uuid"] for x in run("show", cat)["links"]} == {ids["l1"], ids["l2"]}
-    el = _el(_xml(model), cat)
+    el = by_id(capella_xml(model), cat)
     assert el.tag == "ownedPhysicalLinkCategories" and el.get("links").split() == ["#" + ids["l1"], "#" + ids["l2"]]
     data, code = run("pa", "categorize", cat, ids["ce"], ok=False)
     assert code == 1 and "physical links" in data["error"]

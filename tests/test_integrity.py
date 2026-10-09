@@ -6,15 +6,13 @@ import pathlib
 import subprocess
 import sys
 
+from helpers import created_ids, named
+
 LA_PRECONDITION = "e9d60f7e-fddd-4200-8c03-ba3bf73c7fcf"  # owned by an LA CapabilityRealization
 GUARD = "1e54ce22-b4ad-4638-a1e9-1154827ec496"  # a transition's guard constraint
 SPAWN = "a0159943-264f-4a97-a245-565fb6bf9db4"  # linked from a guard's text
 TEST_FEX = "1a414995-f4cd-488c-8152-486e459fb9de"
 REQ_NAMED = "TestReq1"
-
-
-def _ids(res):
-    return {s["as"]: s["created"]["uuid"] for s in res["steps"] if "as" in s}
 
 
 def _owner_of(run, uuid):
@@ -48,7 +46,7 @@ def test_delete_keeps_ports_that_carry_interfaces(run):
         {"op": "create-component", "as": "b", "parent": "la:root-component", "name": "B"},
         {"op": "create-component-exchange", "as": "cx", "source": "$a", "target": "$b", "name": "x"},
     ]))
-    ids = _ids(res)
+    ids = created_ids(res)
     port = run("show", ids["cx"], "--attr", "source")["source"]["uuid"]
     run("interface", "provide", port, ids["i"])
     deleted = {d["uuid"] for d in run("delete", ids["cx"])["deleted"]}
@@ -69,7 +67,7 @@ def test_delete_fresh_component_and_package_without_cascade(run):
 
 
 def test_delete_warns_about_split_chains_and_counts_diagram_refs(run):
-    ids = _ids(run("batch", input=json.dumps([
+    ids = created_ids(run("batch", input=json.dumps([
         {"op": "create-function", "as": "a", "parent": "la:root-function", "name": "A"},
         {"op": "create-function", "as": "b", "parent": "la:root-function", "name": "B"},
         {"op": "create-function", "as": "c", "parent": "la:root-function", "name": "C"},
@@ -97,7 +95,7 @@ def test_batch_dollar_text_escapes_and_errors(run):
         {"op": "create-function", "as": "f", "parent": "la:root-function", "name": "$5 budget"},
         {"op": "set", "element": "$f", "values": {"description": "$$x"}},
     ]))
-    f = _ids(res)["f"]
+    f = created_ids(res)["f"]
     shown = run("show", f)
     assert shown["name"] == "$5 budget" and shown["description"] == "$x"
     data, code = run("batch", input=json.dumps([{"op": "set", "element": "$nope", "values": {}}]), ok=False)
@@ -109,7 +107,7 @@ def test_batch_dollar_text_escapes_and_errors(run):
 
 
 def test_set_accepts_json_values(run):
-    entity = run("list", "oa", "entities")["items"][0]["uuid"]
+    entity = named(run("list", "oa", "entities")["items"], "Environment")
     run("batch", input=json.dumps([{"op": "set", "element": entity, "values": {"is_human": True}}]))
     assert run("show", entity, "--attr", "is_human")["is_human"] is True
     data, code = run("batch", input=json.dumps([{"op": "set", "element": entity, "values": {"is_human": "maybe"}}]), ok=False)

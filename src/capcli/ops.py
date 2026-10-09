@@ -9,7 +9,8 @@ from __future__ import annotations
 
 import inspect
 import re
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from capellambse import loader as _loader
 from lxml import etree
@@ -17,11 +18,11 @@ from lxml import etree
 from . import capabilities as _capabilities
 from . import chains as _chains
 from . import data as _data
+from . import interfaces as _interfaces
 from . import modes as _modes
 from . import physical as _physical
-from . import interfaces as _interfaces
-from . import structure as _structure
 from . import status as _status
+from . import structure as _structure
 from .model import (
     COMPONENT_TYPE,
     FUNCTION_TYPE,

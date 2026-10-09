@@ -18,6 +18,7 @@ everywhere):
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
 from .model import (
@@ -97,7 +98,7 @@ def create_link(model, source: str, target: str, name: str):
     owner = next((a for a in _ancestors(comps[0]) if a.uuid in target_anc and hasattr(a, "physical_links")),
                  root_component(model, "pa"))
     ports = []
-    for e, c in zip(ends, comps):
+    for e, c in zip(ends, comps, strict=True):
         ports.append(e if type_name(e) == "PhysicalPort" else c.physical_ports.create("PhysicalPort", name=name))
     link = owner.physical_links.create("PhysicalLink", name=name, ends=ports)
     return {"created": brief(link), "owner": brief(owner), "ports": [brief(p) for p in ports]}
@@ -162,13 +163,13 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
     if len(lks) == 1:
         first = nodes_of[0][0]
     else:
-        shared = set(c.uuid for c in nodes_of[0]) & set(c.uuid for c in nodes_of[1])
+        shared = {c.uuid for c in nodes_of[0]} & {c.uuid for c in nodes_of[1]}
         if not shared:
             raise CapError(f"Links {lks[0].name!r} and {lks[1].name!r} do not share a node")
         # Parallel links share both nodes: then start from link 1's first end.
         first = next((c for c in nodes_of[0] if c.uuid not in shared), nodes_of[0][0])
     hops, current = [first], first
-    for lk, ends in zip(lks, nodes_of):
+    for lk, ends in zip(lks, nodes_of, strict=True):
         if current not in ends:
             raise CapError(f"Link {lk.name!r} does not start at node {current.name!r}; links must be consecutive")
         nxt = ends[1] if ends[0] == current else ends[0]
@@ -184,7 +185,7 @@ def create_path(model, name: str, links: list[str], parent: str | None = None):
     invs = [add_xml_child(model, path._element, "ownedPhysicalPathInvolvements",
                           f"{alias}:PhysicalPathInvolvement", involved="#" + item.uuid)
             for item in items]
-    for a, b in zip(invs, invs[1:]):
+    for a, b in pairwise(invs):
         a.set("nextInvolvements", "#" + b.get("id"))  # the order, as Capella writes it
     return {"created": brief(path), "owner": brief(owner), "hops": [brief(h) for h in hops]}
 

@@ -14,10 +14,21 @@ removes the links attached to it.
 
 from __future__ import annotations
 
+from itertools import pairwise
 from typing import Any
 
-from .model import (LAYERS, CapError, brief, constraint_text, endpoint_owner, layer, resolve, root_function,
-                    type_name, with_status)
+from .model import (
+    LAYERS,
+    CapError,
+    brief,
+    constraint_text,
+    endpoint_owner,
+    layer,
+    resolve,
+    root_function,
+    type_name,
+    with_status,
+)
 from .model import is_function as _is_function
 from .model import require_layer as _require_layer
 from .model import same_layer as _same_layer
@@ -183,7 +194,7 @@ def create_chain(
         if not _is_function(fn):
             raise CapError(f"Path entries must be functions, got {type_name(fn)} {fn.uuid}")
         _same_layer(par, fn)
-    for a, b in zip(fns, fns[1:]):
+    for a, b in pairwise(fns):
         cands = _exchanges_between(model, a, b)
         if not cands:
             raise CapError(

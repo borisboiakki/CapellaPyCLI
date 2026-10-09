@@ -20,18 +20,18 @@ from __future__ import annotations
 from typing import Any
 
 from .model import (
-    XSI_TYPE,
     LAYERS,
+    XSI_TYPE,
     CapError,
-    constraint_text,
-    set_constraint,
     brief,
+    constraint_text,
     is_component,
     is_function,
     layer,
     require_layer,
     resolve,
     same_layer,
+    set_constraint,
     type_name,
     with_status,
 )

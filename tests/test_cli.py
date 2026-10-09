@@ -1,5 +1,7 @@
 import json
 
+from helpers import named
+
 HOGWARTS = "0d2edb8f-fa34-4e73-89ec-fb9a63001440"
 
 
@@ -223,7 +225,7 @@ def test_chain_involve_realize_and_delete(run):
         "chain", "create", "--layer", "sa", "--name", "N",
         "--path", ids["acquire"], "--path", ids["compute"],
     )["created"]["uuid"]
-    cap = run("list", "sa", "capabilities")["items"][0]["uuid"]
+    cap = named(run("list", "sa", "capabilities")["items"], "Capability")
     run("chain", "involve", ch, cap)
     assert run("chain", "involve", ch, cap)["unchanged"]
 
@@ -259,23 +261,23 @@ def test_operational_process(run):
 
 
 def test_show_attr_does_not_clobber_type(run):
-    item = run("search", "--type", "ExchangeItem")["items"][0]["uuid"]
+    item = named(run("search", "--type", "ExchangeItem")["items"], "ExchangeItem 1")
     shown = run("show", item, "--attr", "type")
     assert shown["type"] == "ExchangeItem" and shown["attr_type"]
 
 
 def test_set_enum_lists_allowed_values(run):
-    fn = run("list", "la", "functions")["items"][1]["uuid"]
+    fn = named(run("list", "la", "functions")["items"], "manage the school")
     data, code = run("set", fn, "kind=bogus", ok=False)
     assert code == 1 and "FUNCTION" in data["error"]
     assert run("set", fn, "kind=split")["values"]["kind"].endswith("SPLIT")
 
 
 def test_set_existing_property_value_and_remove_realization(run):
-    pv = run("search", "--type", "StringPropertyValue")["items"][0]["uuid"]
+    pv = named(run("search", "--type", "StringPropertyValue")["items"], "version")
     assert run("set", pv, "value=2.0")["values"]["value"] == "2.0"
     f = created(run, "create", "function", "--parent", "la:root-function", "--name", "f")
-    sf = run("list", "sa", "functions")["items"][1]["uuid"]
+    sf = named(run("list", "sa", "functions")["items"], "Important Function")
     run("realize", f, sf)
     link = run("show", f, "--attr", "function_realizations")["function_realizations"][0]["uuid"]
     run("delete", link)
