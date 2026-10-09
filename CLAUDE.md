@@ -52,6 +52,7 @@ src/capcli/
   data.py          data model: classes, properties, enumerations, exchange items
   modes.py         modes and states: state machines, regions, states, transitions
   physical.py      physical architecture: ports, links, paths, deployment
+  structure.py     packages, moving elements, repair structure
 templates/
   AGENTS.md                         agent instructions for a *model* repository
   skills/capella-model/SKILL.md     the same as an Agent Skill (OpenCode, Claude Code)
@@ -64,6 +65,7 @@ tests/
   test_data.py          data model
   test_modes.py         modes and states
   test_physical.py      physical architecture
+  test_move.py          packages, move, repair structure
   test_docs.py     keeps the templates in sync with the CLI (see below)
   data/model/      capellambse's Capella 7.0 test model (Apache-2.0, DB InfraGO AG)
 ```
@@ -80,15 +82,17 @@ status.py         ← imports model
 data.py           ← imports model
 modes.py          ← imports model
 physical.py       ← imports model
+structure.py      ← imports model
 ops.py            ← imports model and every feature module (merges their OPS)
 cli.py            ← imports everything
 ```
 
 `model.py` depends on nothing in the package. The feature modules
 (`chains.py`, `capabilities.py`, `status.py`, `data.py`, `modes.py`,
-`physical.py`) import only
+`physical.py`, `structure.py`) import only
 from `model.py`. Helpers they share, such as `status_name` / `with_status` and
 `add_xml_child` / `datavalue_alias` (creating elements capellambse can't),
+`ancestors` / `common_owner` (where an exchange or link belongs),
 live in `model.py`. `ops.py` imports both and
 merges their `OPS` dicts into its registry. Keep it that way: a feature
 module importing `ops` creates an import cycle (this happened once, and is
@@ -132,8 +136,9 @@ A create op must return `{"created": brief(obj), ...}` so it works with `"as"`.
 
 `model.resolve()` accepts a UUID or a shortcut:
 `<layer>:root-function` (`oa:root-activity`), `<layer>:root-component`
-(`oa:root-entity`, which is the OA entity *package*), and `<layer>:structure`
-(the Structure package, where actors live).
+(`oa:root-entity`, which is the OA entity *package*), `<layer>:structure`
+(the Structure package, where actors live), and the root packages
+`<layer>:functions`, `:capabilities`, `:data`, `:interfaces`.
 
 ### JSON shapes (keep them stable, because agents parse them)
 
@@ -209,6 +214,9 @@ Check these again when upgrading capellambse.
 | Deployment: capellambse also offers `InstanceDeploymentLink`, but Capella uses `PartDeploymentLink`, owned by the host's Part (`location` = host Part, `deployedElement` = deployed Part) | `physical.deploy` |
 | `PhysicalPath.involved_items.append()` writes involvements without the `nextInvolvements` chain that orders them | `physical.create_path` writes it; `_path_hops` reads the order from it |
 | `PhysicalComponent.deployed_components` is computed; deployment lives on Parts | Resolve the component's Part (`physical._part`) |
+| Appending an element to another containment list moves it, but a component's Part stays in the old parent | `structure._move_part` moves the Part (tag `ownedFeatures` in a component, `ownedParts` in a package) |
+| After a move, exchanges/links keep their old owner, which may no longer be the common parent of their ends | `structure._rehome_links` (same rule as creation: `model.common_owner`) |
+| `PhysicalComponent` keeps sub-packages in `component_pkgs`; every other component/function/package uses `packages` | `structure._pkg_list` |
 | `obj.name` on unnamed link elements, and some deprecated accessors, raise `FutureWarning` | Warnings are silenced in `main()`. Wrap fallbacks in `warnings.catch_warnings()` |
 | capellambse can't create or lay out diagrams | Out of scope. New elements aren't drawn |
 | capellambse allows any containment, e.g. sub-systems in SA | Arcadia rules enforced in capcli (next section) |
@@ -230,7 +238,8 @@ Check these again when upgrading capellambse.
    `ops.structure_violations`):
    - SA is a black box: the System is the only non-actor SA component;
    - actors (SA/LA/PA) live in the Structure package, never inside a component;
-   - `is_actor` can't be toggled with `set`.
+   - `is_actor` can't be toggled with `set`;
+   - `move` applies the same rules, and moves stay within a layer.
 6. **Every realization has both ends** (`targetElement` and `sourceElement`).
 7. **delete never leaves a dangling reference.** `capcli check` must stay
    `ok` after every write in every test.
@@ -371,8 +380,8 @@ reload, `check` ok). Only capcli commands are missing. Roughly in order:
    Capella, because messages and nodes have ordering rules.
 7. **Interface allocation**: raw XML, because capellambse marks
    `InterfaceAllocation` abstract.
-8. **Structure**: packages, moving an element to another parent, and a
-   repair command for models that break the structure rules.
+8. ~~Structure~~: done (`capcli package create`, `move`, `repair structure`).
+   Still missing: reordering elements, an automatic fix for SA sub-systems.
 
 Capability pre- and postconditions (constraints) are also missing.
 

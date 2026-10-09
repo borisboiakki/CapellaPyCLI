@@ -15,7 +15,7 @@ from typing import Any
 
 import click
 
-from . import __version__, capabilities, chains, data, modes, ops, physical, status
+from . import __version__, capabilities, chains, data, modes, ops, physical, status, structure
 from .model import (
     LAYERS,
     CapError,
@@ -894,6 +894,41 @@ def pa_path(model, name, links, parent):
 def pa_deploy(model, element, host, remove):
     """Deploy ELEMENT (a behaviour or node component) on HOST."""
     return physical.deploy(model, element, host, remove)
+
+
+@cli.group("package")
+def package_group() -> None:
+    """Packages (function, component, capability, data and interface packages)."""
+
+
+@package_group.command("create")
+@click.option("--parent", required=True, help="A package, function or component; or la:functions, la:structure, la:capabilities, la:data, la:interfaces.")
+@click.option("--name", required=True)
+@write_command
+def package_create(model, parent, name):
+    """Create a sub-package; its kind follows from PARENT."""
+    return structure.create_package(model, parent, name)
+
+
+@cli.command("move")
+@click.argument("element")
+@click.argument("to")
+@write_command
+def move_cmd(model, element, to):
+    """Move ELEMENT under TO (same layer); its Part and exchanges follow."""
+    return structure.move(model, element, to)
+
+
+@cli.group("repair")
+def repair_group() -> None:
+    """Repair models (preview with `capcli --dry-run repair …`)."""
+
+
+@repair_group.command("structure")
+@write_command
+def repair_structure(model):
+    """Move actors out of components into the Structure package; report SA sub-systems."""
+    return structure.repair(model)
 
 
 @cli.group("status")

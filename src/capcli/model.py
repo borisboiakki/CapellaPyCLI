@@ -118,8 +118,9 @@ def resolve(model, ref: str):
     """Resolve an element reference.
 
     Accepts a UUID, or a shortcut ``<layer>:root-function`` /
-    ``<layer>:root-component`` / ``<layer>:structure`` (e.g.
-    ``la:root-function``).
+    ``<layer>:root-component`` / ``<layer>:structure`` (actors' package) /
+    ``<layer>:functions`` / ``:capabilities`` / ``:data`` / ``:interfaces``
+    (the layer's root packages), e.g. ``la:root-function``.
     """
     if ":" in ref:
         lay, _, what = ref.partition(":")
@@ -129,7 +130,14 @@ def resolve(model, ref: str):
             return root_component(model, lay)
         if what == "structure":
             return structure_pkg(model, lay)
-        raise CapError(f"Unknown shortcut {ref!r}")
+        pkg_attr = {"functions": "function_pkg", "capabilities": "capability_pkg",
+                    "data": "data_pkg", "interfaces": "interface_pkg"}.get(what)
+        if pkg_attr:
+            return getattr(layer(model, lay), pkg_attr)
+        raise CapError(
+            f"Unknown shortcut {ref!r}; known: <layer>:root-function, :root-component, "
+            ":structure, :functions, :capabilities, :data, :interfaces"
+        )
     if not UUID_RE.match(ref):
         raise CapError(f"Not a UUID: {ref!r} (use `capcli search` to find one)")
     try:
@@ -335,6 +343,26 @@ def with_status(d: dict[str, Any], obj) -> dict[str, Any]:
     if name != NOT_SET:
         d["status"] = name
     return d
+
+
+def ancestors(obj):
+    """Proper ancestors of obj inside its layer, nearest first."""
+    p = getattr(obj, "parent", None)
+    while p is not None and layer_key(p) is not None:
+        yield p
+        p = getattr(p, "parent", None)
+
+
+def common_owner(a, b, pred, fallback):
+    """Deepest common proper ancestor of a and b satisfying pred.
+
+    This is where Capella puts an exchange or link between a and b.
+    """
+    b_anc = {x.uuid for x in ancestors(b)}
+    for x in ancestors(a):
+        if pred(x) and x.uuid in b_anc:
+            return x
+    return fallback
 
 
 def endpoint_owner(end):

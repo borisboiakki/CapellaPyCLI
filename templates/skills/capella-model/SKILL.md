@@ -71,7 +71,11 @@ the model:
    - summarize what changed, with names and UUIDs, and show `git diff --stat`;
    - list the diagrams the user must update in Capella, because new elements
      are not drawn automatically.
-7. If capcli can't do something, say so and propose a reviewed Python script
+7. To reorganise the model, use `capcli move` (Parts and exchanges follow);
+   never delete-and-recreate. If `capcli check` reports `structure` problems,
+   preview `capcli --dry-run repair structure` and apply it with the user's
+   agreement.
+8. If capcli can't do something, say so and propose a reviewed Python script
    using `capellambse`. Never fall back to raw XML edits.
 
 ## Reading the output
@@ -81,7 +85,8 @@ the model:
   when it finds broken references.
 - Wherever a command takes an element, you can give a UUID or a shortcut:
   `la:root-function`, `la:root-component`, `la:structure` (the package for
-  actors), `oa:root-activity`,
+  actors), `la:functions` / `:capabilities` / `:data` / `:interfaces` (root
+  packages), `oa:root-activity`,
   `oa:root-entity` (likewise for `sa` and `pa`).
 
 ## Commands
@@ -168,6 +173,11 @@ capcli allocate <component-exchange> <physical-link|physical-path>
 capcli allocate <component-port> <physical-port>
 capcli pa show <component|port|link|path>     # deployment, hops, allocations, issues
 
+# Structure: packages, moving, repair
+capcli package create --parent <la:functions|la:structure|la:capabilities|la:data|la:interfaces|pkg|function|component> --name Avionics
+capcli move <element> <new-parent>            # same layer; Part and exchanges follow
+capcli --dry-run repair structure             # preview, then without --dry-run to apply
+
 # Progress status (the project's ProgressStatus values only)
 capcli status values                          # DRAFT, TO_BE_REVIEWED, … REVIEWED_OK
 capcli status set TO_BE_REVIEWED <uuid>...    # NOT_SET clears; also: set <uuid> status=DRAFT
@@ -245,3 +255,5 @@ later steps. The ops and their arguments:
 | `create-physical-link` | `source`, `target`, `name` |
 | `create-physical-path` | `name`, `links`, `parent` |
 | `deploy` | `element`, `host`, `remove` |
+| `create-package` | `parent`, `name` |
+| `move` | `element`, `to` |
